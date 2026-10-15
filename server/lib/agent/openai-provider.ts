@@ -17,7 +17,7 @@ import type { OpenAIProviderConfig } from "../settings";
 import { getReasoningEffortBlocklist, parseModelId, settings } from "../settings";
 import { readWithTimeout } from "../stream-timeout";
 import { getImagePath, imageToBase64 } from "../uploads";
-import { extractOpenAIUsage } from "../usage-tracking";
+import { excludeCachedFromOpenAIInput, extractOpenAIUsage } from "../usage-tracking";
 import { getHttpCodexUserAgent, getHttpUserAgent, resolveClientFingerprint } from "../user-agent";
 import { applyCodexStableRequestFields, createCodexRequestIdentity } from "./codex-request";
 import {
@@ -113,6 +113,17 @@ export function applyOpenAIModelMetadata(
 	assertModelInputModalities(model, body, metadata);
 }
 
+/**
+ * 把供应商返回的 usage 归一为内部口径：inputTokens 不含缓存，缓存读取/写入独立字段。
+ *
+ * ⚠️ 新增 provider adapter 前必须先调研其 token 数据组成：input 是否已含缓存、缓存读取/写入
+ * 分别落在哪个字段、数值是「单次值」还是「会话累计值」，再决定换算方式。弄错的代价不会立刻
+ * 显现——错误口径会被静默写入 api_requests，污染用量统计与缓存命中率，事后只能靠数据特征
+ * 反推修补。
+ *
+ * OpenAI 的 prompt_tokens 已含缓存部分，因此这里减去 cached 才是纯输入；扣减规则见
+ * {@link excludeCachedFromOpenAIInput}。
+ */
 function parsedUsageToUsageData(usage: unknown): GenerateMetaResult["usage"] {
 	if (typeof usage !== "object" || usage === null) return null;
 	const data = usage as Record<string, unknown>;
@@ -131,13 +142,17 @@ function parsedUsageToUsageData(usage: unknown): GenerateMetaResult["usage"] {
 		}
 		return undefined;
 	};
+	const cachedInput =
+		numberValue("cachedInputTokens", "cached_input_tokens") ??
+		(typeof inputDetails?.cached_tokens === "number" ? inputDetails.cached_tokens : 0);
+	const rawInput =
+		numberValue("inputTokens", "promptTokens", "input_tokens", "prompt_tokens") ?? 0;
 	return {
-		inputTokens: numberValue("inputTokens", "promptTokens", "input_tokens", "prompt_tokens") ?? 0,
+		// OpenAI 的 prompt_tokens 含缓存部分，统一归一到「input 不含缓存」。
+		inputTokens: excludeCachedFromOpenAIInput(rawInput, cachedInput),
 		outputTokens:
 			numberValue("completionTokens", "outputTokens", "completion_tokens", "output_tokens") ?? 0,
-		cachedInputTokens:
-			numberValue("cachedInputTokens", "cached_input_tokens") ??
-			(typeof inputDetails?.cached_tokens === "number" ? inputDetails.cached_tokens : 0),
+		cachedInputTokens: cachedInput,
 		cacheCreationInputTokens:
 			numberValue("cacheCreationInputTokens", "cache_creation_input_tokens") ?? 0,
 		cacheCreation5mInputTokens:
@@ -147,6 +162,23 @@ function parsedUsageToUsageData(usage: unknown): GenerateMetaResult["usage"] {
 		reasoningTokens:
 			numberValue("reasoningTokens", "reasoning_tokens") ??
 			(typeof details?.reasoning_tokens === "number" ? details.reasoning_tokens : 0),
+	};
+}
+
+/**
+ * 事件里的 usage 已经过适配层归一（{@link ParsedStreamEvent.usage} 的 inputTokens 即纯输入），
+ * 这里只做字段重命名。再扣一次缓存会把已归一的输入减成错误的小值甚至负数。
+ */
+function eventUsageToUsageData(usage: ParsedStreamEvent["usage"]): GenerateMetaResult["usage"] {
+	if (!usage) return null;
+	return {
+		inputTokens: usage.inputTokens ?? usage.promptTokens ?? 0,
+		outputTokens: usage.completionTokens ?? 0,
+		cachedInputTokens: usage.cachedInputTokens ?? 0,
+		cacheCreationInputTokens: usage.cacheCreationInputTokens ?? 0,
+		cacheCreation5mInputTokens: usage.cacheCreation5mTokens ?? 0,
+		cacheCreation1hInputTokens: usage.cacheCreation1hTokens ?? 0,
+		reasoningTokens: usage.reasoningTokens ?? 0,
 	};
 }
 
@@ -1429,7 +1461,7 @@ export class OpenAIProvider implements ProviderAdapter {
 				await options?.onTextDelta?.(evt.text);
 			}
 			if (evt.reasoning) await options?.onReasoningDelta?.(evt.reasoning);
-			if (evt.usage) usage = parsedUsageToUsageData(evt.usage);
+			if (evt.usage) usage = eventUsageToUsageData(evt.usage);
 			if (evt.invalidState) {
 				if (text && isCompletionLimitReason(evt.invalidState.reason)) {
 					outputTruncated = true;
@@ -1519,7 +1551,7 @@ export class OpenAIProvider implements ProviderAdapter {
 				await options?.onTextDelta?.(evt.text);
 			}
 			if (evt.reasoning) await options?.onReasoningDelta?.(evt.reasoning);
-			if (evt.usage) usage = parsedUsageToUsageData(evt.usage);
+			if (evt.usage) usage = eventUsageToUsageData(evt.usage);
 			if (evt.invalidState) {
 				if (text && isCompletionLimitReason(evt.invalidState.reason)) {
 					outputTruncated = true;
@@ -2320,8 +2352,12 @@ export function parseResponsesAPIEvent(
 		});
 		results.push({
 			usage: {
+				// promptTokens 是上下文足迹（含缓存），inputTokens 是纯输入，两者语义不同。
 				promptTokens: usage.input_tokens,
-				inputTokens: usage.input_tokens,
+				inputTokens: excludeCachedFromOpenAIInput(
+					usage.input_tokens,
+					usage.input_tokens_details?.cached_tokens ?? 0,
+				),
 				completionTokens: usage.output_tokens,
 				reasoningTokens: usage.output_tokens_details?.reasoning_tokens ?? undefined,
 				cachedInputTokens: usage.input_tokens_details?.cached_tokens ?? undefined,
@@ -3147,6 +3183,7 @@ function parseSSELine(
 	// Convert to usage event for context window tracking.
 	if (chunk.usage && (!chunk.choices || chunk.choices.length === 0)) {
 		const promptTokens = chunk.usage.prompt_tokens;
+		const cachedInputTokens = chunk.usage.prompt_tokens_details?.cached_tokens;
 		logger.debug("OpenAI usage-only chunk", {
 			hasPromptTokens: promptTokens != null,
 			usage: chunk.usage,
@@ -3155,11 +3192,12 @@ function parseSSELine(
 			return [
 				{
 					usage: {
+						// promptTokens 是上下文足迹（含缓存），inputTokens 是纯输入，两者语义不同。
 						promptTokens,
-						inputTokens: promptTokens,
+						inputTokens: excludeCachedFromOpenAIInput(promptTokens, cachedInputTokens ?? 0),
 						completionTokens: chunk.usage.completion_tokens,
 						reasoningTokens: chunk.usage.completion_tokens_details?.reasoning_tokens ?? undefined,
-						cachedInputTokens: chunk.usage.prompt_tokens_details?.cached_tokens ?? undefined,
+						cachedInputTokens,
 					},
 				},
 			];
