@@ -1631,6 +1631,13 @@ export async function processEvent(
 	const { narratorId, broadcastTargetId } = ctx;
 
 	switch (event.type) {
+		case "reasoning_status": {
+			await (event.active
+				? ctx.addSubstatus?.("reasoning")
+				: ctx.removeSubstatus?.("reasoning")
+			)?.catch(() => {});
+			return null;
+		}
 		case "stream_text": {
 			ctx.fileReferenceContexts ??= new FileReferenceContextTracker();
 			const fileReferenceContext = ctx.fileReferenceContexts.capture(

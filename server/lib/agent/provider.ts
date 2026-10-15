@@ -188,6 +188,9 @@ export interface ProviderAdapter {
 		toolName?: string,
 	): unknown;
 
+	/** 将被动系统提醒附到最后一个工具结果；不支持或无结果时返回 false。 */
+	appendToolResultContext?(toolResults: unknown[], text: string): boolean;
+
 	/** Append a user turn to history (mutates in place) */
 	pushUserTurn(
 		history: unknown[],

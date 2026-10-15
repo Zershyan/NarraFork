@@ -2345,9 +2345,15 @@ export async function drainInjectionsIntoHistory(
 	active: ActiveNarrator,
 	locale: Locale,
 	subagent?: { parentNarratorId: string; parentToolUseId: string },
-): Promise<{ text: string; parts: AgentInputPart[]; onConsumed: () => void }> {
+): Promise<{
+	text: string;
+	parts: AgentInputPart[];
+	toolResultContext?: string;
+	onConsumed: () => void;
+}> {
 	const narratorId = active.narratorId;
 	const parts: AgentInputPart[] = [];
+	let toolResultContext: string | undefined;
 	const { buildPendingQuestionHint } = await import("./narrator-question-service");
 	const pendingQuestionHint = await buildPendingQuestionHint(narratorId);
 	if (pendingQuestionHint) parts.push({ text: pendingQuestionHint });
@@ -2392,7 +2398,7 @@ export async function drainInjectionsIntoHistory(
 			tasksBody.cadenceInterval = active._tasksReminderInterval ?? 15;
 		}
 		const { body, content } = sideCarBodyWithText("living_work_spec", tasksBody, locale);
-		const { messageId, turnText } = await deliverInjection(narratorId, {
+		const { turnText } = await deliverInjection(narratorId, {
 			subagent,
 			content,
 			body,
@@ -2400,7 +2406,8 @@ export async function drainInjectionsIntoHistory(
 			schedule: "onNextTurn",
 			locale,
 		});
-		if (turnText) parts.push({ text: turnText, messageId: messageId ?? undefined });
+		// 例行摘要不构成新的用户请求；支持的协议沿用工具结果续接。
+		if (turnText) toolResultContext = turnText;
 	}
 
 	// The fence goes out on its own cadence, or alongside a tasks reminder when the
@@ -2486,6 +2493,7 @@ export async function drainInjectionsIntoHistory(
 	return {
 		text: parts.map((part) => part.text).join("\n\n"),
 		parts,
+		...(toolResultContext ? { toolResultContext } : {}),
 		onConsumed: () => {
 			for (const delivery of adoptedDeliveries) consumeAgentMessageDelivery(delivery);
 			for (const delivery of adoptedMailbox) consumeMailboxDelivery(delivery);

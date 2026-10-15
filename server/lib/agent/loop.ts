@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import type { ContextCharCache } from "@shared/context-composition";
 import type { ContextInputCharacters, ContextUsageSnapshot } from "@shared/context-usage";
 import { createThrottledProgressReporter, type ProgressSnapshot } from "@shared/progress-phase";
+import { supportsOmittedThinking } from "@shared/reasoning-effort-support";
 import {
 	createStreamingEditOrigin,
 	STREAMING_EDIT_ORIGIN_MAX_CODE_UNITS,
@@ -757,6 +758,23 @@ function collectReasoningBlocks(
 		}
 	}
 	return blocks.length > 0 ? blocks : undefined;
+}
+
+// 区分合法省略展示状态和旧协议的空签名块。
+function hasContinuableReasoning(map: Map<string, ReasoningBlockEntry>, model: string): boolean {
+	for (const { text, providerMetadata } of map.values()) {
+		if (
+			text.trim() ||
+			providerMetadata?.openai?.reasoningEncryptedContent?.trim() ||
+			providerMetadata?.gemini?.thoughtSignature?.trim() ||
+			(text === "" &&
+				supportsOmittedThinking(model) &&
+				providerMetadata?.anthropic?.signature?.trim())
+		) {
+			return true;
+		}
+	}
+	return false;
 }
 
 function collectCompletedWebSearches(
@@ -3041,23 +3059,33 @@ async function* agentLoopInMetadataSnapshot(
 		if (!config.getAfterToolsInjections) return;
 		try {
 			const injection = await config.getAfterToolsInjections();
-			const text = (typeof injection === "string" ? injection : injection.text).trim();
-			if (!text) return;
+			const injectionText = (typeof injection === "string" ? injection : injection.text).trim();
+			// 例行任务摘要属于状态而非新的用户请求：支持的协议把它续接到最后一个工具结果，
+			// 不支持时才退回普通输入文本。
+			const routineContext =
+				typeof injection === "string" ? "" : (injection.toolResultContext ?? "").trim();
+			const attached =
+				!!routineContext &&
+				!!provider.appendToolResultContext?.(pendingToolResults, routineContext);
+			const text =
+				routineContext && !attached
+					? [injectionText, routineContext].filter(Boolean).join("\n\n")
+					: injectionText;
 			const parts = typeof injection === "string" ? undefined : injection.parts;
-			// Legacy hosts return one opaque string. Never lose input if a host supplies
-			// incomplete provenance: without an exact partition it cannot be de-duplicated.
-			if (
-				parts &&
-				parts
-					.map((part) => part.text)
-					.join("\n\n")
-					.trim() === text
-			) {
-				pendingInputParts.push(...parts);
-			} else {
-				pendingInputParts.push({ text });
+			const partsCoverInput =
+				text === injectionText &&
+				!!parts &&
+				parts.map((part) => part.text).join("\n\n").trim() === injectionText;
+			if (text) {
+				// Legacy hosts return one opaque string. Never lose input if a host supplies
+				// incomplete provenance: without an exact partition it cannot be de-duplicated.
+				if (partsCoverInput && parts) {
+					pendingInputParts.push(...parts);
+				} else {
+					pendingInputParts.push({ text });
+				}
 			}
-			if (typeof injection !== "string" && injection.onConsumed) {
+			if ((text || routineContext) && typeof injection !== "string" && injection.onConsumed) {
 				pendingInputConsumptions.push(injection.onConsumed);
 			}
 		} catch (err) {
@@ -3850,6 +3878,11 @@ async function* agentLoopInMetadataSnapshot(
 			/** Completion-limit stop observed for this attempt. Kept through stream end so
 			 * usage/final events are consumed without falling into generic recovery paths. */
 			let completionLimitMessage: string | undefined;
+			/** Set when that limit was hit with NOTHING to continue from — no text, no tool
+			 * call, no usable reasoning. There is no partial work to resume, so reporting the
+			 * upstream failure is the only honest ending: a continuation would just ask the
+			 * model to spend the same budget again. */
+			let emptyTruncationMessage: string | undefined;
 			let requestDiagnostics: ApiRequestDiagnostics | undefined;
 			let requestDump: ApiRequestDumpCollector | undefined;
 			/**
@@ -4346,6 +4379,24 @@ async function* agentLoopInMetadataSnapshot(
 			}
 
 			/**
+			 * Whether this attempt produced anything worth continuing from.
+			 *
+			 * Deliberately broader than `assistantText`: a half-written tool call, a completed
+			 * web search, or an image generation are all real progress even when no prose was
+			 * written. A truncation with none of these has no partial work to resume, so the
+			 * only thing a continuation could do is spend the same budget a second time.
+			 */
+			function hasMeaningfulOutput(): boolean {
+				return (
+					assistantText.trim().length > 0 ||
+					toolUses.length > 0 ||
+					orphanedToolInputNames().length > 0 ||
+					!!collectCompletedWebSearches(webSearchAccum) ||
+					!!collectCompletedImageGenerations(imageGenAccum)
+				);
+			}
+
+			/**
 			 * Discard the partial output of an aborted attempt that carried only
 			 * reasoning (and/or a tool call with truncated input) so the identical
 			 * request can be re-sent without the truncated remnants leaking into
@@ -4470,6 +4521,7 @@ async function* agentLoopInMetadataSnapshot(
 				sawMeaningfulResponse = false;
 				sawErrorEvent = false;
 				completionLimitMessage = undefined;
+				emptyTruncationMessage = undefined;
 				mimoEllipsisRetry = false;
 				// NOTE: lastRetryErrorMessage is intentionally NOT reset here.
 				// It persists across retries so that if a retry produces an empty
@@ -4821,6 +4873,9 @@ async function* agentLoopInMetadataSnapshot(
 							outputIndex: parsed.textOutputIndex,
 						};
 						if (parsed.contentBoundary?.phase === "start") {
+							if (parsed.contentBoundary.kind === "reasoning") {
+								yield { type: "reasoning_status", active: true };
+							}
 							yield* outputContent.boundary(parsed.contentBoundary);
 						}
 						if (parsed.reasoning) {
@@ -4927,6 +4982,9 @@ async function* agentLoopInMetadataSnapshot(
 						}
 						if (parsed.contentBoundary && parsed.contentBoundary.phase !== "start") {
 							yield* outputContent.boundary(parsed.contentBoundary);
+							if (parsed.contentBoundary.kind === "reasoning") {
+								yield { type: "reasoning_status", active: false };
+							}
 						}
 						// Content is acknowledged by the awaited event consumer before even
 						// the first tool card is shown (not just before eager execution).
@@ -5547,16 +5605,30 @@ async function* agentLoopInMetadataSnapshot(
 								return;
 							}
 							if (classification.category === "completion_limit") {
+								// 无可续接内容时不驱动续跑，仍消费尾随 usage 后再报错。
 								if (completionLimitMessage == null) {
 									completionLimitMessage = message;
-									logger.info("Provider hit completion token limit", {
-										narratorId: config.narratorId,
-										provider: effectiveProvider,
-										model: effectiveModel,
-										reason,
-										message,
-									});
-									yield { type: "output_truncated", message };
+									const canContinue =
+										hasMeaningfulOutput() ||
+										hasContinuableReasoning(reasoningBlockMap, effectiveModel);
+									if (canContinue) {
+										logger.info("Provider hit completion token limit", {
+											narratorId: config.narratorId,
+											provider: effectiveProvider,
+											model: effectiveModel,
+											reason,
+											message,
+										});
+										yield { type: "output_truncated", message };
+									} else {
+										emptyTruncationMessage = message;
+										logger.warn("Provider hit its output limit with nothing to continue from", {
+											narratorId: config.narratorId,
+											provider: effectiveProvider,
+											model: effectiveModel,
+											reason,
+										});
+									}
 								}
 								continue;
 							}
@@ -5864,6 +5936,7 @@ async function* agentLoopInMetadataSnapshot(
 						);
 						continue;
 					}
+
 					if (guidanceSignal?.aborted) {
 						observeSoftStopForTurn();
 						// Guidance is not a transport fault. Finalize this partial turn below,
@@ -6330,6 +6403,22 @@ async function* agentLoopInMetadataSnapshot(
 					startFirstTokenTimerForAttempt = undefined;
 				}
 
+				// The limit was hit with nothing to continue from. The stream (and its trailing
+				// usage) has now been fully consumed, so surface the upstream failure instead of
+				// letting the caller drive a continuation that can only repeat the exhaustion.
+				if (emptyTruncationMessage != null) {
+					const emptyTruncationReason = emptyTruncationMessage;
+					yield* finishRequest(emptyTruncationReason);
+					yield {
+						type: "error",
+						message:
+							config.locale === "zh-CN"
+								? `模型耗尽了输出上限，但这一轮没有任何可续接的内容（没有正文、没有工具调用，也没有可回传的推理）。上游原始信息：${emptyTruncationReason}`
+								: `The model exhausted its output limit without producing anything to continue from (no text, no tool call, no usable reasoning). Upstream said: ${emptyTruncationReason}`,
+					};
+					return;
+				}
+
 				if (guidanceSignal?.aborted) {
 					observeSoftStopForTurn();
 					break;
@@ -6755,16 +6844,10 @@ async function* agentLoopInMetadataSnapshot(
 				// into the skeleton-first reminder. Treating it as reasoning-only would
 				// discard that evidence and replay the identical request, reproducing the
 				// same truncation until the retry budget is exhausted.
-				const hasMeaningfulOutput =
-					assistantText.trim().length > 0 ||
-					toolUses.length > 0 ||
-					orphanedToolInputNames().length > 0 ||
-					!!collectCompletedWebSearches(webSearchAccum) ||
-					!!collectCompletedImageGenerations(imageGenAccum);
 				const hasReasoning = !!collectReasoningBlocks(reasoningBlockMap);
 				if (
 					completionLimitMessage == null &&
-					!hasMeaningfulOutput &&
+					!hasMeaningfulOutput() &&
 					hasReasoning &&
 					// A tool that already ran makes this not a dead turn: discarding the
 					// attempt would throw its result away and re-send the same request.

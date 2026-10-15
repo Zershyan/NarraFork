@@ -104,6 +104,12 @@ export function claudeVersionAtLeast(
 	return parsed.major > major || (parsed.major === major && parsed.minor >= minor);
 }
 
+// 4.7 起的 Claude 默认可省略思考摘要，但签名仍承载完整推理状态。
+export function supportsOmittedThinking(model: string): boolean {
+	const parsed = parseClaudeModel(model);
+	return parsed != null && claudeVersionAtLeast(parsed, 4, 7);
+}
+
 /**
  * Whether an id names a Claude generation that predates effort support.
  * These family-specific generations are the built-in blacklist entries.

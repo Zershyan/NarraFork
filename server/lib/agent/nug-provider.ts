@@ -521,6 +521,10 @@ export class NugProvider implements ProviderAdapter {
 		return { toolUseId, content: [{ text: output }], isError };
 	}
 
+	appendToolResultContext(toolResults: unknown[], text: string): boolean {
+		return this.activeDelegate?.appendToolResultContext?.(toolResults, text) ?? false;
+	}
+
 	pushUserTurn(
 		history: unknown[],
 		content: string,

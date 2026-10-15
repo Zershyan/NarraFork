@@ -530,6 +530,7 @@ export type AgentEvent =
 			/** Called only after the current message's real tool row is durable. */
 			onToolPersisted?: (binding: ToolCallBinding) => void;
 	  }
+	| { type: "reasoning_status"; active: boolean }
 	| { type: "turn_complete"; turnIndex: number }
 	| { type: "max_turns_exceeded"; maxTurns: number }
 	| { type: "stream_reset" }
@@ -932,6 +933,8 @@ export interface AgentAfterToolsInput {
 	text: string;
 	/** Ordered fragments covering text, so a rebuild can replace only the rows it actually replayed. */
 	parts?: readonly AgentInputPart[];
+	/** 属于状态而非新用户请求的正文：支持的协议把它续接到最后一个工具结果，否则退回输入文本。 */
+	toolResultContext?: string;
 	onConsumed?: () => void;
 }
 

@@ -6,9 +6,11 @@
  *   bun test server/services/__tests__/spec-reminder.test.ts
  */
 import { beforeAll, describe, expect, test } from "bun:test";
+import { eq } from "drizzle-orm";
 import { db } from "../../db";
-import { narrators } from "../../db/schema";
+import { narratorMessages, narrators } from "../../db/schema";
 import { generateId } from "../../lib/id";
+import type { ActiveNarrator } from "../narrator-session-state";
 import {
 	buildBehaviorFenceReminder,
 	buildSpecToolResultReminder,
@@ -54,6 +56,43 @@ beforeAll(async () => {
 	await createNarrator(blockedTasksNarratorId);
 	await createNarrator(allDoneTasksNarratorId);
 	await createNarrator(tooManyTasksNarratorId);
+});
+
+test("每15次的任务摘要持久化一次并交给被动工具上下文，不产生新用户指令", async () => {
+	const id = generateId();
+	await createNarrator(id);
+	await writeSpecFile(
+		id,
+		"spec://tasks.json",
+		JSON.stringify({ tasks: [{ text: "完成界面修改", status: "doing" }] }),
+	);
+	const { drainInjectionsIntoHistory } = await import("../narrator-session");
+	const active = {
+		narratorId: id,
+		_tasksReminderInterval: 15,
+		_fenceInterval: -1,
+		_todoReminderCompletedToolCount: 14,
+		_lastTasksReminderCompletedToolCount: 0,
+		_lastFenceCompletedToolCount: 0,
+	} as ActiveNarrator;
+	expect((await drainInjectionsIntoHistory(active, "zh-CN")).toolResultContext).toBeUndefined();
+	active._todoReminderCompletedToolCount = 15;
+	const first = await drainInjectionsIntoHistory(active, "zh-CN");
+	expect(first.text).toBe("");
+	expect(first.toolResultContext).toContain("完成界面修改");
+	expect((await drainInjectionsIntoHistory(active, "zh-CN")).toolResultContext).toBeUndefined();
+	const messages = db
+		.select()
+		.from(narratorMessages)
+		.where(eq(narratorMessages.narratorId, id))
+		.all();
+	expect(messages).toHaveLength(1);
+	expect(messages[0]?.role).toBe("sys");
+	expect(messages[0]?.contentJson).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({ type: "system_injection", source: "living_work_spec" }),
+		]),
+	);
 });
 
 describe("buildBehaviorFenceReminder", () => {
