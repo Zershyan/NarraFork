@@ -850,8 +850,13 @@ export function isPlatformInstanceUsable(instance: {
 			const ids = Array.isArray(instance.config.credentialIds)
 				? instance.config.credentialIds.filter((id): id is string => typeof id === "string")
 				: undefined;
-			const manager = getCodexManager();
-			return ids ? manager.hasAvailableCredentialsAmong(ids) : manager.hasAvailableCredentials;
+			try {
+				const manager = getCodexManager();
+				return ids ? manager.hasAvailableCredentialsAmong(ids) : manager.hasAvailableCredentials;
+			} catch {
+				// 账号池读不出来只影响就绪判断，不能让解析链路跟着失败。
+				return false;
+			}
 		}
 		case "CommandCode":
 			return !!resolveCommandCodeToken(instance.config.apiKey as string | undefined).credential;
@@ -865,10 +870,20 @@ export function isPlatformInstanceUsable(instance: {
 	}
 }
 
-/** Command Code 的凭据可以来自设置页手填的 API key，或 CLI 落盘的 auth.json。 */
+/**
+ * Command Code 的凭据可以来自设置页手填的 API key，或 CLI 落盘的 auth.json。
+ *
+ * 模型目录是整个平台共用的，所以只要还有一条可用的 Command Code 实例就算可用。
+ */
 export function hasConfiguredCommandCodeProvider(): boolean {
 	const config = s().commandCode;
-	return !config?.disabled && !!resolveCommandCodeToken(config?.apiKey).credential;
+	if (!config?.disabled && resolveCommandCodeToken(config?.apiKey).credential) return true;
+	return (s().agent?.platformInstances ?? []).some(
+		(instance) =>
+			instance.platform === "CommandCode" &&
+			!instance.disabled &&
+			!!resolveCommandCodeToken(instance.config.apiKey as string | undefined).credential,
+	);
 }
 
 /**
