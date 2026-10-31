@@ -1351,4 +1351,24 @@ describe("provider add nested route", () => {
 		expect(container.querySelectorAll('[role="button"]').length).toBe(3);
 		expectNoSave();
 	});
+
+	test("实例配置页可以直接删掉内置那一条", async () => {
+		await mount();
+		const card = [...container.querySelectorAll('[role="button"]')].find((node) =>
+			node.textContent?.includes("Command Code"),
+		);
+		if (!card) throw new Error("Missing Command Code card");
+		await click(card);
+		await click(button("platformInstanceDelete"));
+		expect(saveCalls).toBe(1);
+		const saved = (savedPayloads.at(-1)?.agent as {
+			platformInstances?: Array<{ prefix: string }>;
+		}).platformInstances;
+		// 清单是唯一事实来源：删掉之后这条实例不再出现，平台卡也跟着消失。
+		expect(saved?.map((instance) => instance.prefix)).toEqual(["codex"]);
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		});
+		expect(router.state.location.pathname).toBe("/settings/providers");
+	});
 });
