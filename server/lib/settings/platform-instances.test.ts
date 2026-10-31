@@ -74,14 +74,21 @@ describe("platform instance migration payload", () => {
 		).toBeNull();
 	});
 
-	test("旧单例存在时生成待落库的实例，prefix 与旧版一致", () => {
+	test("迁移时每个平台类型都生成一个实例，旧配置带进对应实例", () => {
 		const payload = migrationPayloadForPlatformInstances({
 			legacy: { codex: { loadBalancingMode: "tier-balanced" } },
 		});
-		expect(payload?.map((instance) => instance.prefix)).toEqual(["codex"]);
+		expect(payload?.map((instance) => instance.prefix)).toEqual([
+			"codex",
+			"CommandCode",
+			"tokendance",
+		]);
+		expect(payload?.[0]?.config).toEqual({ loadBalancingMode: "tier-balanced" });
+		// 没配置过的类型也建实例，配置为空——以后用户想填就填，想删就删。
+		expect(payload?.[1]?.config).toEqual({});
 	});
 
-	test("没有旧配置时不写空数组", () => {
-		expect(migrationPayloadForPlatformInstances({ legacy: {} })).toBeNull();
+	test("清单已存在（含空清单）时不再迁移", () => {
+		expect(migrationPayloadForPlatformInstances({ instances: [], legacy: {} })).toBeNull();
 	});
 });

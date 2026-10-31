@@ -56,8 +56,10 @@ function hasConfig(value: unknown): value is Record<string, unknown> {
  * 凭空造一条实例会让供应商列表多出三个未配置的条目。
  */
 export function resolvePlatformInstances(source: PlatformInstanceSource): PlatformInstance[] {
-	const explicit = source.instances ?? [];
-	if (explicit.length > 0) return explicit.map((instance) => ({ ...instance }));
+	// 清单一旦存在就是权威：空数组表示「真的没有实例」，不再回退合成旧单例，
+	// 否则用户把实例删干净后，内置平台会自己冒回来。
+	const explicit = source.instances;
+	if (explicit) return explicit.map((instance) => ({ ...instance }));
 
 	const disabled = new Set(source.disabledProviders ?? []);
 	const result: PlatformInstance[] = [];
@@ -101,7 +103,20 @@ export function duplicateInstancePrefixes(
 export function migrationPayloadForPlatformInstances(
 	source: PlatformInstanceSource,
 ): PlatformInstance[] | null {
-	if ((source.instances ?? []).length > 0) return null;
-	const resolved = resolvePlatformInstances(source);
-	return resolved.length > 0 ? resolved : null;
+	if (source.instances) return null;
+	// 初始时每个平台类型都有一个实例（带旧的单例配置）；之后加/删都只看清单。
+	const disabled = new Set(source.disabledProviders ?? []);
+	return (Object.keys(PLATFORM_DEFAULTS) as PlatformInstanceKind[]).map((platform) => {
+		const defaults = PLATFORM_DEFAULTS[platform];
+		const config = source.legacy?.[LEGACY_KEYS[platform]];
+		return {
+			id: `platform-${platform}`,
+			platform,
+			name: defaults.name,
+			suffix: "",
+			prefix: defaults.prefix,
+			disabled: disabled.has(defaults.prefix),
+			config: hasConfig(config) ? { ...config } : {},
+		};
+	});
 }
