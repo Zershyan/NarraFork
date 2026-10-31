@@ -1,4 +1,5 @@
 import { getCodexManager } from "@server/lib/codex-manager";
+import { platformInstanceForPrefix } from "@server/lib/settings";
 
 /**
  * Human-readable name for a credential id, or the id itself when no better name exists.
@@ -18,7 +19,7 @@ export function resolveCredentialDisplayName(
 	if (!provider || !credentialId) return null;
 
 	try {
-		if (provider === "codex") {
+		if (platformInstanceForPrefix(provider)?.platform === "codex") {
 			const snapshot = getCodexManager().snapshot();
 			const cred = snapshot.entries.find((c) => c.id === credentialId);
 			return cred?.displayName || cred?.email || cred?.accountId || credentialId;

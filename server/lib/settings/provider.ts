@@ -16,6 +16,7 @@ import { AppError, ValidationError } from "../errors";
 import { getEffectiveModelProfile, resolveEffectiveModelCard } from "../model-catalog";
 import { isNugCachedModelAvailable, resolveNugModelMeta } from "../nug-model-cache";
 import { getTokenDanceCatalogModels, getTokenDanceRuntimeConfig } from "../tokendance-runtime";
+import { PLATFORM_DEFAULTS, type PlatformInstance } from "./platform-instances";
 import type {
 	AnthropicProviderConfig,
 	GeminiProviderConfig,
@@ -690,7 +691,7 @@ export function getOpenaiProviderConfig(prefix?: string): OpenAIProviderConfig |
 
 export function usesCodexApiMode(prefix?: string): boolean {
 	if (!prefix) return false;
-	if (prefix === "codex") return true;
+	if (platformInstanceForPrefix(prefix)?.platform === "codex") return true;
 	return getOpenaiProviderConfig(prefix)?.apiMode === "codex";
 }
 
@@ -712,19 +713,24 @@ export function usesCodexModel(prefix?: string, model?: string): boolean {
 
 export function usesStatefulApi(prefix?: string): boolean {
 	if (!prefix) return false;
-	if (prefix === "codex") return true;
+	if (platformInstanceForPrefix(prefix)?.platform === "codex") return true;
 	const mode = getOpenaiProviderConfig(prefix)?.apiMode;
 	return mode === "codex" || mode === "responses";
 }
 
 export function usesStatefulModel(prefix?: string, model?: string): boolean {
-	if (prefix === "tokendance" && getTokenDanceRuntimeConfig()) {
-		const rawModel = model?.startsWith("tokendance:") ? model.slice("tokendance:".length) : model;
-		const catalog = getTokenDanceCatalogModels().find((m) => m.id === rawModel);
+	// 没连接的 TokenDance 前缀不接管判断，继续走通用规则（同名 API 供应商仍可能用它）。
+	if (
+		prefix &&
+		platformInstanceForPrefix(prefix)?.platform === "tokendance" &&
+		getTokenDanceRuntimeConfig(prefix)
+	) {
+		const head = `${prefix}:`;
+		const rawModel = model?.startsWith(head) ? model.slice(head.length) : model;
+		const catalog = getTokenDanceCatalogModels(prefix).find((m) => m.id === rawModel);
 		if (!catalog) return false;
 		const protocol =
-			resolveModelProtocol("tokendance", model) ??
-			selectTokenDanceProtocol(catalog.supported_protocols);
+			resolveModelProtocol(prefix, model) ?? selectTokenDanceProtocol(catalog.supported_protocols);
 		return protocol === "openai-responses";
 	}
 	if (usesStatefulApi(prefix)) return true;
@@ -820,12 +826,42 @@ function hasConfiguredAnthropicProvider(): boolean {
 	return providers.some((p) => !p.disabled && !!p.apiKey);
 }
 
-function hasConfiguredCodexProvider(): boolean {
-	if (!s().codex) return false;
-	try {
-		return getCodexManager().availableCount > 0;
-	} catch {
-		return false;
+/** 前缀对应的平台实例（清单驱动）；不是平台前缀就返回 undefined。 */
+export function platformInstanceForPrefix(prefix?: string): PlatformInstance | undefined {
+	if (!prefix) return undefined;
+	return s().agent?.platformInstances?.find((entry) => entry.prefix === prefix);
+}
+
+/**
+ * 一个平台实例是否真的能用：连接与凭据按实例自己的 config 判断。
+ *
+ * 就绪信息与「已配置的供应商」候选共用这一处判断，避免出现「卡片显示未就绪，却仍被
+ * 当成可用供应商选中」。删掉的实例不在清单里，自然也不会再被算进来。
+ */
+export function isPlatformInstanceUsable(instance: {
+	platform: "codex" | "CommandCode" | "tokendance";
+	prefix: string;
+	disabled: boolean;
+	config: Record<string, unknown>;
+}): boolean {
+	if (instance.disabled) return false;
+	switch (instance.platform) {
+		case "codex": {
+			const ids = Array.isArray(instance.config.credentialIds)
+				? instance.config.credentialIds.filter((id): id is string => typeof id === "string")
+				: undefined;
+			const manager = getCodexManager();
+			return ids ? manager.hasAvailableCredentialsAmong(ids) : manager.hasAvailableCredentials;
+		}
+		case "CommandCode":
+			return !!resolveCommandCodeToken(instance.config.apiKey as string | undefined).credential;
+		case "tokendance":
+			// 默认前缀的连接记录在 settings.tokendance 里；额外实例只认自己的 apiKey。
+			return instance.prefix === PLATFORM_DEFAULTS.tokendance.prefix
+				? !!getTokenDanceRuntimeConfig(instance.prefix)
+				: !!String(instance.config.apiKey ?? "").trim();
+		default:
+			return false;
 	}
 }
 
@@ -871,8 +907,10 @@ export function getFirstNugProvider(): NUGProviderConfig | undefined {
 
 function getConfiguredProviderCandidates(): string[] {
 	const available = new Set<string>();
-	const tokenDance = getTokenDanceRuntimeConfig();
-	if (tokenDance && !tokenDance.disabled) available.add("tokendance");
+	// 平台集成的候选取自实例清单：删掉的平台不会再被当成「已配置」。
+	for (const instance of s().agent?.platformInstances ?? []) {
+		if (isPlatformInstanceUsable(instance)) available.add(instance.prefix);
+	}
 	if (hasConfiguredOpenaiProvider()) {
 		for (const p of s().openaiProviders ?? []) {
 			if (!p.disabled && p.apiKey) available.add(p.prefix || "openai");
@@ -882,12 +920,6 @@ function getConfiguredProviderCandidates(): string[] {
 		for (const p of s().anthropicProviders ?? []) {
 			if (!p.disabled && p.apiKey) available.add(p.prefix || "anthropic");
 		}
-	}
-	if (hasConfiguredCodexProvider()) {
-		available.add("codex");
-	}
-	if (hasConfiguredCommandCodeProvider()) {
-		available.add("CommandCode");
 	}
 	if (hasConfiguredNugProvider()) {
 		for (const p of s().nugProviders ?? []) {
@@ -1095,15 +1127,17 @@ export function resolveModelContextWindow(
 		}
 	}
 
+	const tokenDance = provider ? platformInstanceForPrefix(provider)?.platform === "tokendance" : false;
+	const head = `${provider}:`;
 	const bareModel =
-		provider === "tokendance" && getTokenDanceRuntimeConfig()
-			? model.startsWith("tokendance:")
-				? model.slice("tokendance:".length)
+		tokenDance && getTokenDanceRuntimeConfig(provider)
+			? model.startsWith(head)
+				? model.slice(head.length)
 				: model
 			: parseModelId(model).model;
 	const fullModelValue = provider ? `${provider}:${bareModel}` : model;
 
-	if (provider === "tokendance" && getTokenDanceRuntimeConfig()) {
+	if (tokenDance && getTokenDanceRuntimeConfig(provider)) {
 		const user = getEffectiveModelProfile(fullModelValue, options);
 		if (
 			typeof user.contextWindow === "number" &&
@@ -1117,7 +1151,7 @@ export function resolveModelContextWindow(
 						? "card"
 						: "user",
 			};
-		const catalog = getTokenDanceCatalogModels().find((m) => m.id === bareModel);
+		const catalog = getTokenDanceCatalogModels(provider).find((m) => m.id === bareModel);
 		if (catalog && catalog.context_length > 0)
 			return { contextWindow: catalog.context_length, source: "catalog" };
 		return { contextWindow: DEFAULT_CONTEXT_WINDOW, source: "fallback" };

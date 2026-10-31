@@ -1,94 +1,46 @@
 import { describe, expect, test } from "bun:test";
-import {
-	duplicateInstancePrefixes,
-	migrationPayloadForPlatformInstances,
-	PLATFORM_DEFAULTS,
-	resolvePlatformInstances,
-} from "./platform-instances";
+import { initialPlatformInstances, PLATFORM_DEFAULTS } from "./platform-instances";
 
-describe("platform instance resolution", () => {
-	test("有实例清单时以清单为准，忽略旧单例", () => {
-		const resolved = resolvePlatformInstances({
-			instances: [
-				{
-					id: "a",
-					platform: "codex",
-					name: "Codex",
-					suffix: "",
-					prefix: "codex",
-					disabled: false,
-					config: {},
-				},
-			],
-			legacy: { codex: { apiKey: "legacy" }, commandCode: { apiKey: "legacy" } },
-		});
-		expect(resolved).toHaveLength(1);
-		expect(resolved[0]?.prefix).toBe("codex");
-	});
-
-	test("没有实例时把旧单例合成实例，prefix 用平台默认值", () => {
-		const resolved = resolvePlatformInstances({
+describe("platform instance migration", () => {
+	test("每个平台类型各生成一个初始实例，前缀用平台默认值", () => {
+		const instances = initialPlatformInstances({
 			legacy: { codex: { loadBalancingMode: "tier-balanced" }, commandCode: { apiKey: "k" } },
 			disabledProviders: ["CommandCode"],
 		});
-		expect(resolved.map((instance) => instance.prefix)).toEqual(["codex", "CommandCode"]);
-		expect(resolved[0]).toMatchObject({
+		expect(instances.map((instance) => instance.prefix)).toEqual([
+			"codex",
+			"CommandCode",
+			"tokendance",
+		]);
+		expect(instances[0]).toMatchObject({
 			platform: "codex",
 			name: PLATFORM_DEFAULTS.codex.name,
 			suffix: "",
 			disabled: false,
 		});
 		// 旧版的停用清单映射到实例的 disabled
-		expect(resolved[1]).toMatchObject({ prefix: "CommandCode", disabled: true });
+		expect(instances[1]).toMatchObject({ prefix: "CommandCode", disabled: true });
 	});
 
-	test("从未配置过的平台不凭空生成实例", () => {
-		expect(resolvePlatformInstances({})).toEqual([]);
-		expect(resolvePlatformInstances({ legacy: { codex: {} } })).toEqual([]);
-	});
-
-	test("前缀重复能被检出", () => {
-		expect(duplicateInstancePrefixes([{ prefix: "codex" }, { prefix: "codex-2" }])).toEqual([]);
-		expect(duplicateInstancePrefixes([{ prefix: "codex" }, { prefix: "codex" }])).toEqual([
-			"codex",
-		]);
-	});
-});
-
-describe("platform instance migration payload", () => {
-	test("已有实例清单时不再迁移", () => {
-		expect(
-			migrationPayloadForPlatformInstances({
-				instances: [
-					{
-						id: "a",
-						platform: "codex",
-						name: "Codex",
-						suffix: "",
-						prefix: "codex",
-						disabled: false,
-						config: {},
-					},
-				],
-			}),
-		).toBeNull();
-	});
-
-	test("迁移时每个平台类型都生成一个实例，旧配置带进对应实例", () => {
-		const payload = migrationPayloadForPlatformInstances({
-			legacy: { codex: { loadBalancingMode: "tier-balanced" } },
+	test("旧的 CommandCode 配置整份带进实例，Codex 只带开关（凭据仍在账号池）", () => {
+		const [codex, commandCode] = initialPlatformInstances({
+			legacy: {
+				codex: { useWebSocket: false, loadBalancingMode: "tier-balanced" },
+				commandCode: { apiKey: "k", baseUrl: "https://example.test" },
+			},
 		});
-		expect(payload?.map((instance) => instance.prefix)).toEqual([
-			"codex",
-			"CommandCode",
-			"tokendance",
-		]);
-		expect(payload?.[0]?.config).toEqual({ loadBalancingMode: "tier-balanced" });
-		// 没配置过的类型也建实例，配置为空——以后用户想填就填，想删就删。
-		expect(payload?.[1]?.config).toEqual({});
+		expect(codex?.config).toEqual({
+			useWebSocket: false,
+			useWebSearch: true,
+			useImageGeneration: true,
+		});
+		expect(commandCode?.config).toEqual({ apiKey: "k", baseUrl: "https://example.test" });
 	});
 
-	test("清单已存在（含空清单）时不再迁移", () => {
-		expect(migrationPayloadForPlatformInstances({ instances: [], legacy: {} })).toBeNull();
+	test("从未配置过的平台也给一条空实例，用户可以直接补配置或删掉", () => {
+		const instances = initialPlatformInstances({});
+		expect(instances).toHaveLength(3);
+		// TokenDance 的默认前缀沿用既有连接记录，config 留空
+		expect(instances.find((instance) => instance.platform === "tokendance")?.config).toEqual({});
 	});
 });

@@ -437,7 +437,7 @@ export const updateSettingsSchema = z
 				maxTurns: z.number().int().min(1).max(1000),
 				/**
 				 * 「平台集成」的实例清单：同一平台可有多个实例，靠 `prefix` 区分
-				 * （模型 ID 为 `<prefix>:<model>`）。为空时回退旧的单例字段。
+				 * （模型 ID 为 `<prefix>:<model>`）。清单是唯一事实来源，空数组即没有平台。
 				 */
 				platformInstances: z
 					.array(
@@ -1484,7 +1484,12 @@ settingsRoutes.patch("/", requireAdmin, async (c) => {
 
 		// Validate provider prefix conflicts — reserved prefixes and cross-provider duplicates
 		{
-			const RESERVED_PREFIXES = new Set(["codex", "tokendance"]);
+			// 保留前缀属于平台实例本身：删掉实例后，同一个前缀就能给自定义供应商复用。
+			const RESERVED_PREFIXES = new Set(
+				(validated.agent?.platformInstances ?? current.agent?.platformInstances ?? []).map(
+					(instance) => instance.prefix,
+				),
+			);
 			const allPrefixes: Array<{ prefix: string; source: string; legacyTokenDance?: boolean }> = [];
 			const previousCustomProviders = [
 				...(current.customApiProviders ?? []),

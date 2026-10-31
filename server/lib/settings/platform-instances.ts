@@ -1,12 +1,10 @@
-// 「平台集成」实例的统一视图。
+// 「平台集成」的实例清单。
 //
-// 方案 A：同一平台可以存在多个实例，它们存在 `agent.platformInstances` 里；更早的版本把
-// 每个平台写成单例字段（`agent.codex`、`agent.commandCode`、TokenDance 的连接记录）。
-// 这里把两种来源合成同一份清单，供解析、列表与迁移使用：
-//   - 有实例清单就用它（不再看旧字段，避免同一条配置出现两次）；
-//   - 没有实例时按旧字段合成，prefix 沿用平台默认值，disabled 取自 `disabledProviders`。
+// 同一平台可以存在多个实例，它们存在 `agent.platformInstances` 里。清单是唯一事实来源：
+// 前缀只由清单决定，删光就是真的没有平台；更早版本的单例字段（`codex` / `commandCode` /
+// `tokendance`）只在启动迁移时读一次，落成每个类型的初始实例。
 //
-// 纯函数，不读全局 settings，便于单测与迁移脚本复用。
+// 纯函数，不读全局 settings，便于单测与迁移调用。
 
 export type PlatformInstanceKind = "codex" | "CommandCode" | "tokendance";
 
@@ -23,92 +21,64 @@ export interface PlatformInstance {
 	config: Record<string, unknown>;
 }
 
-/** 平台默认前缀与显示名：旧单例迁移与「添加」弹窗的默认值都用它。 */
+/** 平台默认前缀与显示名：初始实例与「添加平台」弹窗的默认值都用它。 */
 export const PLATFORM_DEFAULTS: Record<PlatformInstanceKind, { prefix: string; name: string }> = {
 	codex: { prefix: "codex", name: "Codex" },
 	CommandCode: { prefix: "CommandCode", name: "Command Code" },
 	tokendance: { prefix: "tokendance", name: "TokenDance" },
 };
 
-export interface PlatformInstanceSource {
-	instances?: readonly PlatformInstance[] | null;
-	/** 旧单例字段；键是设置里的字段名（`commandCode` 小写开头）；空对象表示从未配置过。 */
-	legacy?: Partial<Record<"codex" | "commandCode" | "tokendance", unknown>>;
-	/** 旧版的逐 provider 停用清单，迁移时映射到实例的 disabled。 */
+/** 迁移来源：三个平台旧的单例字段，键是设置里的字段名（`commandCode` 小写开头）。 */
+export interface LegacyPlatformSettings {
+	codex?: unknown;
+	commandCode?: unknown;
+	tokendance?: unknown;
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function boolean(value: unknown, fallback: boolean): boolean {
+	return typeof value === "boolean" ? value : fallback;
+}
+
+/**
+ * 一个平台的初始 config。
+ *
+ * Codex 的 config 只有开关，凭据仍留在账号池里；TokenDance 的**内置前缀**沿用
+ * `settings.tokendance` 这条连接记录（连接、支付、OAuth 都在那里），所以 config 留空，
+ * 只有额外实例才把 apiKey 写进自己的 config。
+ */
+function initialConfig(platform: PlatformInstanceKind, legacy: unknown): Record<string, unknown> {
+	if (platform === "tokendance") return {};
+	const config = record(legacy);
+	if (platform === "codex") {
+		return {
+			useWebSocket: boolean(config?.useWebSocket, true),
+			useWebSearch: boolean(config?.useWebSearch, true),
+			useImageGeneration: boolean(config?.useImageGeneration, true),
+		};
+	}
+	return config ? { ...config } : {};
+}
+
+/**
+ * 启动迁移的初始实例：每个平台类型各一条，带上旧单例里已有的配置。
+ *
+ * 没配置过的类型也给一条空 config：用户既可以直接在卡片上补配置，也可以把它删掉。
+ * 只在设置文件里还没有清单时调用一次，之后清单就是唯一事实来源。
+ */
+export function initialPlatformInstances(source: {
+	legacy?: LegacyPlatformSettings;
 	disabledProviders?: readonly string[];
-}
-
-/** 平台标识 → 旧单例字段名。 */
-const LEGACY_KEYS: Record<PlatformInstanceKind, "codex" | "commandCode" | "tokendance"> = {
-	codex: "codex",
-	CommandCode: "commandCode",
-	tokendance: "tokendance",
-};
-
-function hasConfig(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && Object.keys(value).length > 0;
-}
-
-/**
- * 合成实例清单。
- *
- * 旧单例只有在「确实配置过」（非空对象）时才生成实例：空对象意味着用户从未启用该平台，
- * 凭空造一条实例会让供应商列表多出三个未配置的条目。
- */
-export function resolvePlatformInstances(source: PlatformInstanceSource): PlatformInstance[] {
-	// 清单一旦存在就是权威：空数组表示「真的没有实例」，不再回退合成旧单例，
-	// 否则用户把实例删干净后，内置平台会自己冒回来。
-	const explicit = source.instances;
-	if (explicit) return explicit.map((instance) => ({ ...instance }));
-
-	const disabled = new Set(source.disabledProviders ?? []);
-	const result: PlatformInstance[] = [];
-	for (const platform of Object.keys(PLATFORM_DEFAULTS) as PlatformInstanceKind[]) {
-		// 设置字段名与平台标识只有 CommandCode 大小写不同，这里显式映射一次。
-		const config = source.legacy?.[LEGACY_KEYS[platform]];
-		if (!hasConfig(config)) continue;
-		const defaults = PLATFORM_DEFAULTS[platform];
-		result.push({
-			id: `platform-${platform}`,
-			platform,
-			name: defaults.name,
-			suffix: "",
-			prefix: defaults.prefix,
-			disabled: disabled.has(defaults.prefix),
-			config: { ...config },
-		});
-	}
-	return result;
-}
-
-/** 前缀唯一性校验，供保存前检查与「添加」弹窗使用。 */
-export function duplicateInstancePrefixes(
-	instances: readonly Pick<PlatformInstance, "prefix">[],
-): string[] {
-	const seen = new Set<string>();
-	const duplicates = new Set<string>();
-	for (const { prefix } of instances) {
-		if (seen.has(prefix)) duplicates.add(prefix);
-		seen.add(prefix);
-	}
-	return [...duplicates];
-}
-
-/**
- * 启动迁移的载荷：把旧单例落库成 `platformInstances`。
- *
- * 返回 null 表示不需要写：已经有实例清单（迁移过了），或旧字段本来就没配置过。
- * 只做计算，落库由调用方一次性保存，便于测试与回滚。
- */
-export function migrationPayloadForPlatformInstances(
-	source: PlatformInstanceSource,
-): PlatformInstance[] | null {
-	if (source.instances) return null;
-	// 初始时每个平台类型都有一个实例（带旧的单例配置）；之后加/删都只看清单。
+}): PlatformInstance[] {
 	const disabled = new Set(source.disabledProviders ?? []);
 	return (Object.keys(PLATFORM_DEFAULTS) as PlatformInstanceKind[]).map((platform) => {
 		const defaults = PLATFORM_DEFAULTS[platform];
-		const config = source.legacy?.[LEGACY_KEYS[platform]];
+		const legacyKey = platform === "CommandCode" ? "commandCode" : platform;
 		return {
 			id: `platform-${platform}`,
 			platform,
@@ -116,7 +86,7 @@ export function migrationPayloadForPlatformInstances(
 			suffix: "",
 			prefix: defaults.prefix,
 			disabled: disabled.has(defaults.prefix),
-			config: hasConfig(config) ? { ...config } : {},
+			config: initialConfig(platform, source.legacy?.[legacyKey]),
 		};
 	});
 }

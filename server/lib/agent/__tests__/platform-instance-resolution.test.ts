@@ -36,4 +36,43 @@ describe("platform instance resolution (end to end)", () => {
 		settings.agent.platformInstances = [];
 		expect(() => resolveProviderAndModel("codex-9:gpt-5.4")).toThrow();
 	});
+
+	test("删掉内置实例后该平台就消失了", () => {
+		// 清单里只剩一个额外的 codex-2：默认前缀 codex 不再被平台接管。
+		settings.agent.platformInstances = [
+			{
+				id: "platform-codex-2",
+				platform: "codex",
+				name: "Codex-2",
+				suffix: "2",
+				prefix: "codex-2",
+				disabled: false,
+				config: {},
+			},
+		];
+		expect(() => resolveProviderAndModel("codex:gpt-5.4")).toThrow();
+	});
+
+	test("清单为空时不会把旧单例合成回来", () => {
+		settings.agent.platformInstances = [];
+		expect(() => resolveProviderAndModel("codex:gpt-5.4")).toThrow();
+		expect(() => resolveProviderAndModel("tokendance:model")).toThrow();
+	});
+
+	test("删掉内置实例后同一个前缀可以给新实例复用", () => {
+		settings.agent.platformInstances = [
+			{
+				id: "later-codex",
+				platform: "codex",
+				name: "我的 Codex",
+				suffix: "",
+				prefix: "codex",
+				disabled: false,
+				config: { useWebSearch: false },
+			},
+		];
+		const resolved = resolveProviderAndModel("codex:gpt-5.4");
+		expect(resolved.provider).toBe("codex");
+		expect(resolved.adapter).toBeDefined();
+	});
 });

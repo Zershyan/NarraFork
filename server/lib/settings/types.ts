@@ -680,8 +680,9 @@ export interface NarraForkSettings {
 		modelProtocolOverrides?: Record<string, ModelProtocol>;
 		/**
 		 * 「平台集成」的实例清单。同一平台可以有多个实例，靠 `prefix` 区分（模型 ID 为
-		 * `<prefix>:<model>`）；为空时回退到旧的单例字段（codex / commandCode / TokenDance）。
-		 * `prefix` 全局唯一，`suffix` 是用户可改的后缀（空串表示沿用平台默认前缀）。
+		 * `<prefix>:<model>`）。清单是唯一事实来源：空数组表示真的没有平台，删掉实例
+		 * （包括默认前缀那条）就是删掉该平台，不会从旧字段合成回来。
+		 * `prefix` 全局唯一，`suffix` 是生成前缀时用的后缀（空串表示沿用平台默认前缀）。
 		 */
 		platformInstances?: Array<{
 			id: string;

@@ -46,6 +46,7 @@ import {
 } from "../settings-manager-fields";
 import { normalizeCustomApiProviderSettings } from "./custom-api-providers";
 import { DEFAULTS } from "./defaults";
+import { initialPlatformInstances } from "./platform-instances";
 import { _bindSettings } from "./provider";
 import { initializeTokenDanceModelCollection } from "./tokendance-model-collection";
 import type { NarraForkSettings } from "./types";
@@ -107,6 +108,7 @@ export {
 	hasConfiguredNugProvider,
 	isAnthropicProvider,
 	isGeminiProvider,
+	isPlatformInstanceUsable,
 	LARGE_CONTEXT_BOUNDARY,
 	type ModelContextWindowResolution,
 	type ModelContextWindowSource,
@@ -115,6 +117,7 @@ export {
 	openaiProviderPrefix,
 	parseAggModelValue,
 	parseModelId,
+	platformInstanceForPrefix,
 	registerAnthropicModelChecker,
 	registerAnthropicModelLister,
 	registerCodexModelChecker,
@@ -623,6 +626,20 @@ function loadSettingsFromDisk(): NarraForkSettings {
 	}
 
 	if (initializeTokenDanceModelCollection(merged)) needsSave = true;
+
+	// 「平台集成」实例清单：旧单例落成每个平台的初始实例，只在设置文件里还没有清单时执行
+	// 一次。之后清单就是唯一事实来源，删光实例也不会把旧配置合成回来。
+	if (raw.agent?.platformInstances === undefined) {
+		merged.agent.platformInstances = initialPlatformInstances({
+			legacy: {
+				codex: merged.codex,
+				commandCode: merged.commandCode,
+				tokendance: merged.tokendance,
+			},
+			disabledProviders: merged.agent.disabledProviders,
+		});
+		needsSave = true;
+	}
 
 	lastDiskManagerFields = managerFieldsFromSettings(merged);
 	if (needsSave) saveSettings(merged);

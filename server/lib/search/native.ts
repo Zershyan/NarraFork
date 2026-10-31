@@ -3,6 +3,7 @@ import {
 	getAnthropicProviderConfig,
 	getOpenaiProviderConfig,
 	isAnthropicProvider,
+	platformInstanceForPrefix,
 	settings,
 	usesCodexModel,
 } from "../settings";
@@ -46,7 +47,8 @@ export function isNativeSearchEnabled(config: NarraForkSettings = settings): boo
  * toggled, not a permanent regression.
  */
 export function usesInlineNativeSearch(provider: string, model: string): boolean {
-	if (provider === "codex" && settings.codex?.useWebSearch === false) return false;
+	const instance = platformInstanceForPrefix(provider);
+	if (instance?.platform === "codex" && instance.config.useWebSearch === false) return false;
 	if (getOpenaiProviderConfig(provider)?.codexWebSearch === false) return false;
 	return (
 		getEffectiveModelProfile(model.startsWith(`${provider}:`) ? model : `${provider}:${model}`)

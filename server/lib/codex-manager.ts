@@ -2508,6 +2508,16 @@ export class CodexManager {
 		return this.entries.some((entry) => !isArchivedCodexCredential(entry) && !entry.disabled);
 	}
 
+	/** 选中凭据里是否还有可用的——平台实例拿自己的凭据集合判断就绪。 */
+	hasAvailableCredentialsAmong(ids: readonly string[]): boolean {
+		this.reviveQuotaResetCredentials();
+		this.applyCachedQuotaStates();
+		const allowed = new Set(ids);
+		return this.entries.some(
+			(entry) => !isArchivedCodexCredential(entry) && !entry.disabled && allowed.has(entry.id),
+		);
+	}
+
 	/** Enabled, non-archived credentials — i.e. what can actually serve a request. */
 	get availableCount(): number {
 		return this.poolEntries.filter((e) => !e.disabled).length;
