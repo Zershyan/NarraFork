@@ -45,8 +45,8 @@ export const ProviderOverviewView = React.memo(function ProviderOverviewView({
 
 	const getProviderStatus = (group: ProviderGroup): ProviderStatus => {
 		if (group.disabled) return "disabled";
+		// 平台实例的 configured 已经按实例自己的连接判断（TokenDance 默认前缀看连接记录）。
 		if (group.configured === false) return "unverified";
-		if (group.prefix === "tokendance" && group.isPlatform) return "connected";
 		if (group.models.length === 0) return "unverified";
 		return "connected";
 	};

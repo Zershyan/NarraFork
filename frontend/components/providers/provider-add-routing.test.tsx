@@ -155,6 +155,38 @@ const { Route: callbackFileRoute } = await import(
 const tokenDanceFlow = await import("./tokendance-flow");
 restoreDom();
 
+/** 迁移后的平台实例行；卡片只来自这份清单。 */
+function platformInstance(
+	platform: "codex" | "CommandCode" | "tokendance",
+	name: string,
+	config: Record<string, unknown> = {},
+) {
+	return {
+		id: `platform-${platform}`,
+		platform,
+		name,
+		suffix: "",
+		prefix: platform,
+		disabled: false,
+		config,
+	};
+}
+
+/** TokenDance 卡片需要清单里有这条实例，连接记录本身在 `settings.tokendance`。 */
+function withTokenDanceInstance<T extends { agent: Record<string, unknown> }>(
+	settings: T,
+	name = "TokenDance fresh",
+): T {
+	const instances = (settings.agent.platformInstances ?? []) as unknown[];
+	return {
+		...settings,
+		agent: {
+			...settings.agent,
+			platformInstances: [...instances, platformInstance("tokendance", name)],
+		},
+	};
+}
+
 const initialSettings = {
 	customApiProviders: [
 		{
@@ -168,7 +200,18 @@ const initialSettings = {
 		},
 	],
 	nugProviders: [],
-	agent: { disabledProviders: [], hiddenModels: [] },
+	agent: {
+		disabledProviders: [],
+		hiddenModels: [],
+		platformInstances: [
+			platformInstance("codex", "Codex", {
+				useWebSocket: true,
+				useWebSearch: true,
+				useImageGeneration: true,
+			}),
+			platformInstance("CommandCode", "Command Code"),
+		],
+	},
 };
 const i18n = createInstance();
 await i18n.init({
@@ -302,7 +345,17 @@ beforeEach(() => {
 		savedPayloads.push(clone(payload));
 		requestOptions.push(options);
 		if (saveGate) await saveGate;
-		if (!saveError || persistBeforeError) serverSettings = { ...serverSettings, ...clone(payload) };
+		if (!saveError || persistBeforeError) {
+			const patch = clone(payload) as Record<string, unknown>;
+			// 服务端对 `agent` 是浅合并：只带部分字段的补丁不会清掉其它设置（如平台实例清单）。
+			if (patch.agent && typeof patch.agent === "object") {
+				patch.agent = {
+					...(serverSettings.agent as Record<string, unknown>),
+					...(patch.agent as Record<string, unknown>),
+				};
+			}
+			serverSettings = { ...serverSettings, ...patch };
+		}
 		if (saveError) throw saveError;
 		return clone(serverSettings);
 	});
@@ -843,7 +896,7 @@ describe("provider add nested route", () => {
 			);
 			await act(async () => root?.unmount());
 			root = createRoot(container);
-			serverSettings = {
+			serverSettings = withTokenDanceInstance({
 				...clone(initialSettings),
 				tokendance: {
 					connected: true,
@@ -859,7 +912,7 @@ describe("provider add nested route", () => {
 						},
 					],
 				},
-			};
+			});
 			queryClient.setQueryData(["admin", "settings"], serverSettings);
 			sessionStorage.setItem(TOKENDANCE_FLOW_MARKER, `remount-${status}`);
 			const serverStatus = status === "pending-cancel-failure" ? "pending" : status;
@@ -960,12 +1013,12 @@ describe("provider add nested route", () => {
 		expect(customDetail?.provider.apiKey).toBe("retry-preserved-key");
 	});
 
-	test("TokenDance appears only when connected in platform and local-only delete is guarded", async () => {
+	test("TokenDance card follows the instance list and local-only delete is guarded", async () => {
 		await mount();
 		expect(container.textContent).not.toContain("TokenDance fresh");
 		await act(async () => root?.unmount());
 		root = createRoot(container);
-		serverSettings = {
+		serverSettings = withTokenDanceInstance({
 			...clone(initialSettings),
 			tokendance: {
 				connected: true,
@@ -974,7 +1027,7 @@ describe("provider add nested route", () => {
 				generation: 1,
 				models: [],
 			},
-		};
+		});
 		queryClient.setQueryData(["admin", "settings"], serverSettings);
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => {
@@ -1015,13 +1068,14 @@ describe("provider add nested route", () => {
 		await act(async () => {
 			await new Promise((resolve) => setTimeout(resolve, 20));
 		});
-		expect(container.textContent).not.toContain("TokenDance fresh");
+		// 删掉的是连接记录，不是平台实例：卡片还在，只是回到「未配置」。
+		expect(container.textContent).toContain("TokenDance fresh");
 		expect(container.textContent).toContain("Existing provider");
 		expect(saveCalls).toBe(0);
 	});
 
 	test("successful TokenDance callback opens its detail with unified hide/show model controls", async () => {
-		serverSettings = {
+		serverSettings = withTokenDanceInstance({
 			...clone(initialSettings),
 			agent: { hiddenModels: ["existing:keep"], disabledProviders: [] },
 			tokendance: {
@@ -1044,7 +1098,7 @@ describe("provider add nested route", () => {
 					},
 				],
 			},
-		};
+		});
 		queryClient.setQueryData(["admin", "settings"], serverSettings);
 		// Row windows come from the catalog's window endpoint, which reports the platform's value.
 		queryClient.setQueryData(["model-catalog", "window", "tokendance:raw:model"], {
@@ -1099,7 +1153,7 @@ describe("provider add nested route", () => {
 		]);
 	});
 	test("successful TokenDance refresh clears transient recovery action at the same generation", async () => {
-		serverSettings = {
+		serverSettings = withTokenDanceInstance({
 			...clone(initialSettings),
 			tokendance: {
 				connected: true,
@@ -1108,7 +1162,7 @@ describe("provider add nested route", () => {
 				generation: 1,
 				models: [],
 			},
-		};
+		});
 		queryClient.setQueryData(["admin", "settings"], serverSettings);
 		const refreshSpy = spyOn(api, "tokenDanceRefreshModels")
 			.mockRejectedValueOnce(new ApiError("redacted", 402, { recoveryAction: "top_up_balance" }))
@@ -1131,7 +1185,7 @@ describe("provider add nested route", () => {
 	});
 
 	test("TokenDance overview switch drafts locally and only persists via the save bar", async () => {
-		serverSettings = {
+		serverSettings = withTokenDanceInstance({
 			...clone(initialSettings),
 			tokendance: {
 				connected: true,
@@ -1140,7 +1194,7 @@ describe("provider add nested route", () => {
 				generation: 1,
 				models: [],
 			},
-		};
+		});
 		queryClient.setQueryData(["admin", "settings"], serverSettings);
 		const updateSpy = spyOn(api, "tokenDanceUpdateConnection").mockImplementation(
 			async (disabled) => {
@@ -1173,18 +1227,17 @@ describe("provider add nested route", () => {
 		expect(saveCalls).toBe(0);
 		expect(container.textContent).toContain(text("unsavedSave"));
 		expect(container.textContent).toContain(text("unsavedDiscard"));
-		// 保存条是唯一的提交点：点「保存更改」后才写连接与 settings。
+		// 保存条是唯一的提交点：平台实例的开关只写 disabledProviders，不碰连接记录。
 		await click(button("unsavedSave"));
-		expect(updateSpy).toHaveBeenCalledTimes(1);
-		expect(updateSpy.mock.calls[0]?.[0]).toBe(true);
+		expect(updateSpy).toHaveBeenCalledTimes(0);
 		expect(saveCalls).toBe(1);
 		expect(
 			(savedPayloads.at(-1)?.agent as { disabledProviders?: string[] }).disabledProviders,
-		).not.toContain("tokendance");
+		).toContain("tokendance");
 	});
 
 	test("TokenDance detail enable switch drafts locally too", async () => {
-		serverSettings = {
+		serverSettings = withTokenDanceInstance({
 			...clone(initialSettings),
 			tokendance: {
 				connected: true,
@@ -1193,7 +1246,7 @@ describe("provider add nested route", () => {
 				generation: 1,
 				models: [],
 			},
-		};
+		});
 		queryClient.setQueryData(["admin", "settings"], serverSettings);
 		const updateSpy = spyOn(api, "tokenDanceUpdateConnection").mockImplementation(
 			async (disabled) => {
@@ -1243,9 +1296,9 @@ describe("provider add nested route", () => {
 				node.textContent?.includes(needle),
 			);
 		// 两者都启用：按插入序 codex 在 CommandCode 前。
-		expect(cardIndex("codex")).toBeLessThan(cardIndex("CommandCode"));
+		expect(cardIndex("Codex")).toBeLessThan(cardIndex("Command Code"));
 		const codexCard = [...container.querySelectorAll('[role="button"]')].find((node) =>
-			node.textContent?.includes("codex"),
+			node.textContent?.includes("Codex"),
 		);
 		const toggle = codexCard?.querySelector<HTMLInputElement>('input[type="checkbox"]');
 		if (!toggle) throw new Error("Missing codex platform switch");
@@ -1255,14 +1308,14 @@ describe("provider add nested route", () => {
 		});
 		expect(saveCalls).toBe(0);
 		expect(container.textContent).toContain(text("unsavedSave"));
-		expect(cardIndex("codex")).toBeLessThan(cardIndex("CommandCode"));
+		expect(cardIndex("Codex")).toBeLessThan(cardIndex("Command Code"));
 		// 保存后才重排一次：codex 在平台分区内沉底。
 		await click(button("unsavedSave"));
 		expect(saveCalls).toBe(1);
 		expect(
 			(savedPayloads.at(-1)?.agent as { disabledProviders?: string[] }).disabledProviders,
 		).toContain("codex");
-		expect(cardIndex("codex")).toBeGreaterThan(cardIndex("CommandCode"));
+		expect(cardIndex("Codex")).toBeGreaterThan(cardIndex("Command Code"));
 	});
 
 	test("slow settings keep the add-page title and back navigation visible", async () => {

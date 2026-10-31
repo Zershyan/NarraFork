@@ -230,6 +230,7 @@ export interface ModelSelectionSettings {
 	agent?: {
 		reasoningEffortBlocklist?: readonly ReasoningEffortBlocklistEntry[] | null;
 		defaultReasoningEffort?: string;
+		platformInstances?: Array<{ prefix: string; platform: string; disabled: boolean }> | null;
 	};
 }
 
@@ -248,7 +249,13 @@ export function resolveCodexCapableProviders(
 	settingsData: ModelSelectionSettings | undefined,
 ): Set<string> {
 	const providers = new Set<string>();
-	if (settingsData?.codexAvailable) providers.add("codex");
+	// Codex 平台的每个实例都是独立前缀；凭据池有凭据时这些前缀都接受思考档位。
+	if (settingsData?.codexAvailable) {
+		providers.add("codex");
+		for (const instance of settingsData.agent?.platformInstances ?? []) {
+			if (instance.platform === "codex" && !instance.disabled) providers.add(instance.prefix);
+		}
+	}
 	for (const provider of settingsData?.openaiProviders ?? []) {
 		if (provider?.prefix && (provider.apiMode ?? "responses") === "codex") {
 			providers.add(provider.prefix);

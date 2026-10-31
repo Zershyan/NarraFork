@@ -18,7 +18,11 @@ function provider(id: string, prefix = id) {
 }
 
 function fixture(initial: Record<string, unknown> = {}) {
-	let persisted = structuredClone(initial);
+	// 迁移后的默认实例清单：平台前缀已占用，和真实安装一致。
+	let persisted: Record<string, unknown> = {
+		agent: { platformInstances: [{ prefix: "codex" }] },
+		...structuredClone(initial),
+	};
 	const events: string[] = [];
 	const payloads: Record<string, unknown>[] = [];
 	const refreshes: Array<{ id: string; protocol: AddProviderType }> = [];
@@ -121,13 +125,17 @@ describe("createProviderAndRefresh", () => {
 
 	for (const source of ["server-custom", "server-nug", "local-custom", "local-nug", "codex"]) {
 		test(`rejects explicitly conflicting prefix from ${source}`, async () => {
-			const settings = source.startsWith("server")
-				? {
-						[source === "server-nug" ? "nugProviders" : "customApiProviders"]: [
-							provider("other", "taken"),
-						],
-					}
-				: {};
+			const settings =
+				source === "codex"
+					? // 平台实例占用的前缀同样不可复用（清单是唯一事实来源）。
+						{ agent: { platformInstances: [{ prefix: "codex" }] } }
+					: source.startsWith("server")
+						? {
+								[source === "server-nug" ? "nugProviders" : "customApiProviders"]: [
+									provider("other", "taken"),
+								],
+							}
+						: {};
 			const local = source.startsWith("local")
 				? providersStateFromSettings({
 						[source === "local-nug" ? "nugProviders" : "customApiProviders"]: [

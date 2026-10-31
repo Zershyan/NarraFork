@@ -503,7 +503,7 @@ export function useAllModels() {
 				}))
 			: [];
 
-		// --- 额外平台实例（codex-2 / CommandCode-2 …）---
+		// --- 平台实例（含默认前缀的那一条）---
 		// 同一平台共用模型目录，只是模型 value 换成实例前缀；停用的实例不贡献模型。
 		const platformInstances =
 			(
@@ -521,30 +521,30 @@ export function useAllModels() {
 		const instanceModelGroups = platformInstances
 			.filter((instance) => !disabledProviders.has(instance.prefix))
 			.map((instance) => {
-				const ids =
+				const entries: Array<{ id: string; label: string }> =
 					instance.platform === "codex"
 						? settingsData?.codexAvailable
-							? codexModelIds
+							? codexModelIds.map((id) => ({ id, label: id }))
 							: []
 						: instance.platform === "CommandCode"
 							? settingsData?.commandcodeAvailable
-								? commandcodeModelIds
+								? commandcodeModelIds.map((id) => ({ id, label: id }))
 								: []
 							: // TokenDance 实例仍用平台目录，凭据由实例自己提供。
 								(settingsData?.tokendance as TokenDancePublicConnection | undefined)?.connected
 								? (
 										(settingsData?.tokendance as TokenDancePublicConnection | undefined)?.models ??
 										[]
-									).map((m) => m.id)
+									).map((m) => ({ id: m.id, label: m.name || m.id }))
 								: [];
 				return {
 					prefix: instance.prefix,
 					name: instance.name,
 					agentProviderType:
 						instance.platform === "codex" ? ("codex" as ProviderCapabilityKey) : undefined,
-					models: ids.map((id) => ({
+					models: entries.map(({ id, label }) => ({
 						value: modelValue(instance.prefix, id),
-						label: id,
+						label,
 						provider: instance.prefix,
 						bareModel: id,
 					})),

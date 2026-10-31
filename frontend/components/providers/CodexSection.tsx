@@ -432,9 +432,6 @@ export const CodexSection = React.memo(function CodexSection({
 	const usageQueueClearSupported = codexManagerParity?.usageQueueClearSupported !== false;
 	const canReadCodexStatus = isCodexRouteSupported("status");
 	const canSetLoadBalancingMode = isCodexRouteSupported("loadBalancingMode");
-	const canSetUseWebSocket = isCodexRouteSupported("useWebSocket");
-	const canSetUseWebSearch = isCodexRouteSupported("useWebSearch");
-	const canSetUseImageGeneration = isCodexRouteSupported("useImageGeneration");
 	const canSetFingerprint = isCodexRouteSupported("fingerprint");
 	const canSetTierOrder = isCodexRouteSupported("tierOrder");
 	const canQueryCredentialUsage = isCodexRouteSupported("credentialUsage");
@@ -496,12 +493,6 @@ export const CodexSection = React.memo(function CodexSection({
 	const [editForm, setEditForm] = useState<CodexCredentialEditForm>(
 		codexCredentialEditForm({ priority: 0 }),
 	);
-	const [useWebSocket, setUseWebSocket] = useState(true);
-	const [useWebSocketInitialized, setUseWebSocketInitialized] = useState(false);
-	const [useWebSearch, setUseWebSearch] = useState(true);
-	const [useWebSearchInitialized, setUseWebSearchInitialized] = useState(false);
-	const [useImageGeneration, setUseImageGeneration] = useState(true);
-	const [useImageGenerationInitialized, setUseImageGenerationInitialized] = useState(false);
 	const [tierOrder, setTierOrder] = useState<CodexPlanTier[]>(CODEX_DEFAULT_TIER_ORDER);
 	const [fingerprint, setFingerprint] = useState<{
 		userAgentMode: "narrafork" | "claude-code" | "codex" | "custom";
@@ -646,21 +637,6 @@ export const CodexSection = React.memo(function CodexSection({
 		archivedPage,
 	]);
 
-	useEffect(() => {
-		if (!status) return;
-		if (!useWebSocketInitialized) {
-			setUseWebSocket(status.useWebSocket ?? true);
-			setUseWebSocketInitialized(true);
-		}
-		if (!useWebSearchInitialized) {
-			setUseWebSearch(status.useWebSearch ?? true);
-			setUseWebSearchInitialized(true);
-		}
-		if (!useImageGenerationInitialized) {
-			setUseImageGeneration(status.useImageGeneration ?? true);
-			setUseImageGenerationInitialized(true);
-		}
-	}, [status, useWebSocketInitialized, useWebSearchInitialized, useImageGenerationInitialized]);
 
 	useEffect(() => {
 		if (statusTierOrder === null) return;
@@ -807,27 +783,6 @@ export const CodexSection = React.memo(function CodexSection({
 	const lbModeMut = useMutation({
 		mutationFn: (mode: CodexLoadBalancingMode) => api.codexSetLoadBalancingMode(mode),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["codex", "status"] }),
-	});
-	const useWebSocketMut = useMutation({
-		mutationFn: (useWebSocket: boolean) => api.codexSetUseWebSocket(useWebSocket),
-		onSuccess: () => {
-			qc.invalidateQueries({ queryKey: ["codex", "status"] });
-			notifications.show({ message: t("codexWebSocketUpdated"), color: "green" });
-		},
-	});
-	const useWebSearchMut = useMutation({
-		mutationFn: (useWebSearch: boolean) => api.codexSetUseWebSearch(useWebSearch),
-		onSuccess: () => {
-			qc.invalidateQueries({ queryKey: ["codex", "status"] });
-			notifications.show({ message: t("codexWebSearchUpdated"), color: "green" });
-		},
-	});
-	const useImageGenerationMut = useMutation({
-		mutationFn: (useImageGeneration: boolean) => api.codexSetUseImageGeneration(useImageGeneration),
-		onSuccess: () => {
-			qc.invalidateQueries({ queryKey: ["codex", "status"] });
-			notifications.show({ message: t("codexImageGenerationUpdated"), color: "green" });
-		},
 	});
 	const tierOrderMut = useMutation({
 		mutationFn: (tierOrder: CodexPlanTier[]) => api.codexSetTierOrder(tierOrder),
@@ -1325,88 +1280,6 @@ export const CodexSection = React.memo(function CodexSection({
 								onChange={(next) => codexProxyMut.mutate(next)}
 								disabled={codexProxyMut.isPending}
 							/>
-							<Group align="flex-end">
-								<Stack gap={4} style={{ flex: 1 }}>
-									<Group gap="xs">
-										<Text size="xs" fw={500}>
-											{t("codexUseWebSocket")}
-										</Text>
-										<Badge size="xs" color="orange" variant="light">
-											{t("codexExperimental")}
-										</Badge>
-									</Group>
-									<Text size="xs" c="dimmed">
-										{t("codexUseWebSocketDesc")}
-									</Text>
-								</Stack>
-								<Switch
-									size="sm"
-									checked={useWebSocket}
-									onChange={(e) => setUseWebSocket(e.currentTarget.checked)}
-									disabled={!canSetUseWebSocket}
-								/>
-								<Button
-									size="xs"
-									onClick={() => canSetUseWebSocket && useWebSocketMut.mutate(useWebSocket)}
-									loading={useWebSocketMut.isPending}
-									disabled={!canSetUseWebSocket}
-									title={!canSetUseWebSocket ? providerRouteUnsupportedReason : undefined}
-								>
-									{t("codexSave")}
-								</Button>
-							</Group>
-							<Group align="flex-end">
-								<Stack gap={4} style={{ flex: 1 }}>
-									<Text size="xs" fw={500}>
-										{t("codexUseWebSearch")}
-									</Text>
-									<Text size="xs" c="dimmed">
-										{t("codexUseWebSearchDesc")}
-									</Text>
-								</Stack>
-								<Switch
-									size="sm"
-									checked={useWebSearch}
-									onChange={(e) => setUseWebSearch(e.currentTarget.checked)}
-									disabled={!canSetUseWebSearch}
-								/>
-								<Button
-									size="xs"
-									onClick={() => canSetUseWebSearch && useWebSearchMut.mutate(useWebSearch)}
-									loading={useWebSearchMut.isPending}
-									disabled={!canSetUseWebSearch}
-									title={!canSetUseWebSearch ? providerRouteUnsupportedReason : undefined}
-								>
-									{t("codexSave")}
-								</Button>
-							</Group>
-							<Group align="flex-end">
-								<Stack gap={4} style={{ flex: 1 }}>
-									<Text size="xs" fw={500}>
-										{t("codexUseImageGeneration")}
-									</Text>
-									<Text size="xs" c="dimmed">
-										{t("codexUseImageGenerationDesc")}
-									</Text>
-								</Stack>
-								<Switch
-									size="sm"
-									checked={useImageGeneration}
-									onChange={(e) => setUseImageGeneration(e.currentTarget.checked)}
-									disabled={!canSetUseImageGeneration}
-								/>
-								<Button
-									size="xs"
-									onClick={() =>
-										canSetUseImageGeneration && useImageGenerationMut.mutate(useImageGeneration)
-									}
-									loading={useImageGenerationMut.isPending}
-									disabled={!canSetUseImageGeneration}
-									title={!canSetUseImageGeneration ? providerRouteUnsupportedReason : undefined}
-								>
-									{t("codexSave")}
-								</Button>
-							</Group>
 						</Stack>
 
 						{/* Client fingerprint */}

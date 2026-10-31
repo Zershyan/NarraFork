@@ -76,8 +76,12 @@ async function saveProvider(
 	if (!isValidProviderDraft(draft)) throw new Error(deps.messages.invalidDraft);
 	const latest = await deps.getSettings();
 	const server = providersStateFromSettings(latest);
+	const platformPrefixes = (
+		(latest.agent as { platformInstances?: Array<{ prefix: string }> } | undefined)
+			?.platformInstances ?? []
+	).map((instance) => instance.prefix);
 	const usedPrefixes = new Set([
-		"codex",
+		...platformPrefixes,
 		...[
 			...server.customApiProviders,
 			...server.nugProviders,

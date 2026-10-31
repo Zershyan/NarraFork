@@ -57,7 +57,6 @@ import { rebaseProviderState } from "../../components/providers/provider-setting
 import {
 	createSnapshot,
 	initialProvidersState,
-	isPlatformProviderPrefix,
 	type ProvidersState,
 	providersReducer,
 	providersStateFromSettings,
@@ -94,6 +93,30 @@ export const Route = createFileRoute("/settings/providers")({
 
 const PROVIDER_SETTINGS_QUERY_GC_TIME_MS = 60_000;
 const PROVIDER_SETTINGS_QUERY_STALE_TIME_MS = 30_000;
+
+/**
+ * 平台实例是否已经配置过：只看它自己的凭据或连接。
+ *
+ * Codex 的 config 只有开关与凭据选择，没有 `credentialIds` 键的是初始实例（沿用账号池），
+ * TokenDance 的默认前缀沿用内置连接记录，额外实例只认自己的 apiKey。
+ */
+function isInstanceConfigured(
+	instance: PlatformInstanceRow,
+	tokenDance: TokenDancePublicConnection | undefined,
+): boolean {
+	switch (instance.platform) {
+		case "codex": {
+			const credentialIds = instance.config.credentialIds;
+			return Array.isArray(credentialIds) ? credentialIds.length > 0 : true;
+		}
+		case "CommandCode":
+			return !!String(instance.config.apiKey ?? "").trim();
+		case "tokendance":
+			return instance.prefix === "tokendance"
+				? !!tokenDance?.connected
+				: !!String(instance.config.apiKey ?? "").trim();
+	}
+}
 
 function getDirtyProviderIds<T extends { id: string }>(
 	currentProviders: T[],
@@ -337,8 +360,21 @@ function SettingsProvidersPage() {
 		[nugDirtyProviderIds],
 	);
 
+	// ── 平台实例 ──
+	// 直接读 settings.agent.platformInstances：清单是唯一事实来源，为空就是没有平台。
+	const platformInstances = useMemo(() => {
+		const list = (
+			settings?.agent as unknown as { platformInstances?: PlatformInstanceRow[] } | undefined
+		)?.platformInstances;
+		return list ?? [];
+	}, [settings?.agent]);
+
 	// ── Prefix conflict detection ──
-	const RESERVED_PREFIXES = useMemo(() => new Set(["codex", "CommandCode"]), []);
+	// 平台实例占用的前缀同样不可给自定义供应商复用；实例删掉后前缀自然释放。
+	const RESERVED_PREFIXES = useMemo(
+		() => new Set(platformInstances.map((instance) => instance.prefix)),
+		[platformInstances],
+	);
 	const allPrefixToId = useMemo(() => {
 		const map = new Map<string, string>();
 		for (const p of [...state.customApiProviders, ...state.nugProviders]) {
@@ -394,13 +430,6 @@ function SettingsProvidersPage() {
 		},
 	});
 	// ── 平台实例（同一平台的第二个及以后）──
-	// 直接读 settings.agent.platformInstances：为空表示还在用旧的三个单例。
-	const platformInstances = useMemo(() => {
-		const list = (
-			settings?.agent as unknown as { platformInstances?: PlatformInstanceRow[] } | undefined
-		)?.platformInstances;
-		return list ?? [];
-	}, [settings?.agent]);
 	const [addPlatformOpen, setAddPlatformOpen] = useState(false);
 	const savePlatformInstances = useCallback(
 		(next: PlatformInstanceRow[]) => {
@@ -793,8 +822,6 @@ function SettingsProvidersPage() {
 	// ── Models maps (memoized) ──
 	const {
 		providerLabels,
-		codexModels,
-		commandcodeModels,
 		instanceModelGroups,
 		openaiByProvider,
 		anthropicByProvider,
@@ -923,10 +950,11 @@ function SettingsProvidersPage() {
 	// 草稿变化时重算但顺序不变；保存成功后快照更新，同一次渲染里顺序自然重排。
 	const providerGroups = useMemo(() => {
 		const byPrefix = new Map<string, ModelOption[]>();
-		const platformPrefixes = new Set(["codex", "CommandCode"]);
-		if (tokenDance?.connected) platformPrefixes.add("tokendance");
-		// 额外平台实例与内置平台同栏展示，卡片上可以改开关；前缀由实例决定（如 codex-2）。
-		for (const instance of platformInstances) platformPrefixes.add(instance.prefix);
+		// 平台集成的卡片完全由实例清单决定：清单里没有这个前缀，卡片就不存在。
+		const instanceByPrefix = new Map(
+			platformInstances.map((instance) => [instance.prefix, instance]),
+		);
+		const platformPrefixes = new Set(instanceByPrefix.keys());
 		// Executable-plugin providers, keyed by prefix. They are presented like platform
 		// providers (single instance, not user-addable) but need their own lookup because
 		// the detail area has to reach the owning plugin rather than a builtin section.
@@ -966,16 +994,7 @@ function SettingsProvidersPage() {
 			if (!byPrefix.has(prefix)) byPrefix.set(prefix, []);
 		};
 
-		if (tokenDance?.connected)
-			for (const m of tokenDance.models)
-				addModel("tokendance", {
-					value: `tokendance:${m.id}`,
-					label: m.name || m.id,
-					provider: "tokendance",
-				});
-		for (const m of codexModels) addModel("codex", m);
-		for (const m of commandcodeModels) addModel("CommandCode", m);
-		// 额外平台实例共用平台模型目录，只是前缀不同。
+		// 每个平台实例共用所属平台的模型目录，只是前缀不同（含默认前缀那一条）。
 		for (const group of instanceModelGroups)
 			for (const m of group.models) addModel(group.prefix, m);
 		for (const g of openaiByProvider) for (const m of g.models) addModel(g.prefix, m);
@@ -1009,8 +1028,7 @@ function SettingsProvidersPage() {
 					// Plugin providers sit in the platform column: like the builtins they are single
 					// instance and cannot be added or removed from this page.
 					const isPlatform = platformPrefixes.has(prefix) || plugin !== undefined;
-					// 平台实例：只有 config 非空才算配置过（新建实例从空白开始，不继承任何凭据）。
-					const instanceConfig = platformInstances.find((entry) => entry.prefix === prefix)?.config;
+					const instance = instanceByPrefix.get(prefix);
 
 					// Find provider config for multi-instance providers so local detail toggles
 					// (provider.disabled) and overview toggles (disabledProviders) agree immediately.
@@ -1019,19 +1037,9 @@ function SettingsProvidersPage() {
 							state.nugProviders.find((p) => p.prefix === prefix))
 						: undefined;
 					const providerId = match?.id;
-					// `disabledProviders` is a plain prefix set, so the overview toggle already
-					// governs plugin providers without any extra wiring. Turning one off hides its
-					// models; it deliberately does NOT stop the plugin, which may also contribute
-					// tools and views.
-					// CommandCode carries its own persisted flag (settings.commandCode.disabled,
-					// which is what stops the provider server-side), so the overview reads the
-					// draft directly and reflects a toggle before it is saved.
-					const disabled =
-						prefix === "tokendance"
-							? tokenDanceDisabled
-							: prefix === "CommandCode"
-								? state.commandCode.disabled
-								: state.disabledProviders.has(prefix) || !!match?.disabled;
+					// 启用开关统一走 `disabledProviders` 草稿：平台实例与插件、自定义供应商同一个
+					// 入口，关掉只隐藏它的模型，不会改动平台连接本身。
+					const disabled = state.disabledProviders.has(prefix) || !!match?.disabled;
 
 					// 排序只看**已保存**的开关状态：用户开着的 provider（哪怕还没配凭据）按
 					// 意图排在前面，关掉的排到最后。未配置的引导交给卡片徽章（unverified），
@@ -1041,20 +1049,13 @@ function SettingsProvidersPage() {
 							savedProviderSnapshot.nugProviders.find((p) => p.prefix === prefix))
 						: undefined;
 					const inactive =
-						prefix === "tokendance"
-							? savedProviderSnapshot.tokenDanceDisabled
-							: prefix === "CommandCode"
-								? savedProviderSnapshot.commandCode.disabled
-								: savedProviderSnapshot.disabledProviders.includes(prefix) ||
-									!!savedMatch?.disabled;
+						savedProviderSnapshot.disabledProviders.includes(prefix) || !!savedMatch?.disabled;
 
 					return {
 						prefix,
 						providerId,
-						label:
-							prefix === "tokendance" && tokenDance?.connected
-								? tokenDance.name || "TokenDance"
-								: (providerLabels[prefix] ?? prefix),
+						// 平台实例的显示名就是用户起的名字。
+						label: instance?.name ?? providerLabels[prefix] ?? prefix,
 						badgeLabel: plugin
 							? t("providerBadgePlugin")
 							: isPlatform
@@ -1064,9 +1065,7 @@ function SettingsProvidersPage() {
 						disabled,
 						inactive,
 						isPlatform,
-						...(instanceConfig === undefined
-							? {}
-							: { configured: Object.keys(instanceConfig).length > 0 }),
+						...(instance ? { configured: isInstanceConfigured(instance, tokenDance) } : {}),
 						...(plugin?.pluginId ? { pluginId: plugin.pluginId } : {}),
 						...(plugin?.contributionId ? { contributionId: plugin.contributionId } : {}),
 					};
@@ -1075,8 +1074,6 @@ function SettingsProvidersPage() {
 				.sort((a, b) => Number(a.inactive) - Number(b.inactive))
 		);
 	}, [
-		codexModels,
-		commandcodeModels,
 		instanceModelGroups,
 		platformInstances,
 		openaiByProvider,
@@ -1090,9 +1087,7 @@ function SettingsProvidersPage() {
 		state.disabledProviders,
 		state.customApiProviders,
 		state.nugProviders,
-		state.commandCode,
 		savedProviderSnapshot,
-		tokenDanceDisabled,
 		t,
 	]);
 
@@ -1103,9 +1098,7 @@ function SettingsProvidersPage() {
 	const selectedProvider = useMemo(() => {
 		const target = search.provider;
 		if (!target) return null;
-		if (target === "tokendance") return tokenDance?.connected ? "tokendance" : null;
-		if (target === "codex" || target === "CommandCode") return target;
-		// 平台实例：以实例 id 选中（兼容旧的 prefix 深链）。
+		// 平台集成以实例 id 选中（兼容旧的 prefix 深链）；清单里没有就不是平台。
 		const instance = platformInstances.find(
 			(entry) => entry.id === target || entry.prefix === target,
 		);
@@ -1121,7 +1114,6 @@ function SettingsProvidersPage() {
 		return pluginProviderGroups?.some((group) => group.prefix === target) ? target : null;
 	}, [
 		search.provider,
-		tokenDance?.connected,
 		state.customApiProviders,
 		state.nugProviders,
 		pluginProviderGroups,
@@ -1166,10 +1158,6 @@ function SettingsProvidersPage() {
 		if (!selectedProvider) return "";
 		const instance = platformInstances.find((entry) => entry.id === selectedProvider);
 		if (instance) return instance.name;
-		// Platform providers: selectedProvider is the prefix
-		if (["codex", "CommandCode", "tokendance"].includes(selectedProvider)) {
-			return providerLabels[selectedProvider] ?? selectedProvider;
-		}
 		// Plugin providers are also addressed by prefix; without this they would fall
 		// through to the multi-instance lookup and render with an empty title.
 		if (selectedPluginProvider) {
@@ -1197,8 +1185,8 @@ function SettingsProvidersPage() {
 	const autoFetchAndFill = useCallback(async () => {
 		const providerId = selectedProvider;
 		if (!providerId) return;
-		// Platform providers (codex / commandcode) manage their own model lists.
-		if (["codex", "CommandCode"].includes(providerId)) return;
+		// 平台实例由所属平台管理自己的模型目录，这里不刷新。
+		if (platformInstances.some((instance) => instance.id === providerId)) return;
 
 		const customApi = state.customApiProviders.find((p) => p.id === providerId);
 		const nug = state.nugProviders.find((p) => p.id === providerId);
@@ -1229,7 +1217,7 @@ function SettingsProvidersPage() {
 		await qc.invalidateQueries({ queryKey: ["admin", "settings"] });
 		await qc.invalidateQueries({ queryKey: ["settings"] });
 		await qc.invalidateQueries({ queryKey: modelCatalogKeys.all });
-	}, [selectedProvider, state, qc]);
+	}, [selectedProvider, state, qc, platformInstances]);
 	autoFetchAndFillRef.current = autoFetchAndFill;
 
 	if (isTokenDanceCallback) return <Outlet />;
@@ -1295,31 +1283,71 @@ function SettingsProvidersPage() {
 					onClose={() => setSelectedProvider(null)}
 				>
 					{selectedPlatformInstance ? (
-						<PlatformInstanceSection
-							key={selectedPlatformInstance.id}
-							instance={selectedPlatformInstance}
-							onSave={(config) => {
-								savePlatformInstanceConfig(selectedPlatformInstance.id, config);
-								notifications.show({ message: t("platformInstanceConfigSaved"), color: "green" });
-							}}
-						/>
-					) : selectedProvider === "tokendance" && tokenDance?.connected ? (
-						<TokenDanceSection
-							connection={tokenDance}
-							enabled={!tokenDanceDisabled}
-							onToggleEnabled={() =>
-								dispatchers.setPlatformDisabled("tokendance", !tokenDanceDisabled)
-							}
-							hiddenModels={state.hiddenModels}
-							onToggleHidden={dispatchers.toggleHidden}
-							onBatchToggleHidden={dispatchers.batchToggleHidden}
-							modelProtocols={state.modelProtocols}
-							onModelProtocolChange={dispatchers.setModelProtocol}
-							onTestModel={setTestingModel}
-							onLogin={() => tokenDanceLogin()}
-							onChanged={refreshTokenDanceSettings}
-							onDeleted={() => setSelectedProvider(null)}
-						/>
+						<Stack gap="lg">
+							<PlatformInstanceSection
+								key={selectedPlatformInstance.id}
+								instance={selectedPlatformInstance}
+								onSave={(config) => {
+									savePlatformInstanceConfig(selectedPlatformInstance.id, config);
+									notifications.show({ message: t("platformInstanceConfigSaved"), color: "green" });
+								}}
+								onDelete={() => {
+									deletePlatformInstance(selectedPlatformInstance.id);
+									setSelectedProvider(null);
+								}}
+							/>
+							{/* 实例只描述「用哪份凭据」；平台本身的管理界面留在这里，与实例配置同屏。 */}
+							{selectedPlatformInstance.platform === "codex" && (
+								<CodexSection
+									hiddenModels={state.hiddenModels}
+									onToggleHidden={dispatchers.toggleHidden}
+									customModels={state.customModels}
+									onCustomModelsChange={dispatchers.setCustomModels}
+									modelProtocols={state.modelProtocols}
+									onModelProtocolChange={dispatchers.setModelProtocol}
+									onTestModel={setTestingModel}
+								/>
+							)}
+							{selectedPlatformInstance.platform === "CommandCode" && (
+								<CommandCodeSection
+									prefix={selectedPlatformInstance.prefix}
+									models={
+										providerGroups.find(
+											(group) => group.prefix === selectedPlatformInstance.prefix,
+										)?.models ?? []
+									}
+									hiddenModels={state.hiddenModels}
+									onToggleHidden={dispatchers.toggleHidden}
+									onBatchToggleHidden={dispatchers.batchToggleHidden}
+									customModels={state.customModels}
+									onCustomModelsChange={dispatchers.setCustomModels}
+									modelProtocols={state.modelProtocols}
+									onModelProtocolChange={dispatchers.setModelProtocol}
+									onTestModel={setTestingModel}
+									onRefreshModels={refreshCommandCodeModels}
+								/>
+							)}
+							{selectedPlatformInstance.platform === "tokendance" &&
+								selectedPlatformInstance.prefix === "tokendance" &&
+								tokenDance?.connected && (
+									<TokenDanceSection
+										connection={tokenDance}
+										enabled={!tokenDanceDisabled}
+										onToggleEnabled={() =>
+											dispatchers.setPlatformDisabled("tokendance", !tokenDanceDisabled)
+										}
+										hiddenModels={state.hiddenModels}
+										onToggleHidden={dispatchers.toggleHidden}
+										onBatchToggleHidden={dispatchers.batchToggleHidden}
+										modelProtocols={state.modelProtocols}
+										onModelProtocolChange={dispatchers.setModelProtocol}
+										onTestModel={setTestingModel}
+										onLogin={() => tokenDanceLogin()}
+										onChanged={refreshTokenDanceSettings}
+										onDeleted={() => setSelectedProvider(null)}
+									/>
+								)}
+						</Stack>
 					) : (
 						<ProviderSectionContent
 							providerKey={selectedProvider}
@@ -1327,7 +1355,6 @@ function SettingsProvidersPage() {
 							state={state}
 							dispatchers={dispatchers}
 							providerModelsMap={providerModelsMap}
-							commandcodeModels={commandcodeModels}
 							pluginModelsByPrefix={pluginModelsByPrefix}
 							anthropicModelsMap={anthropicModelsMap}
 							nugModelsMap={nugModelsMap}
@@ -1340,7 +1367,6 @@ function SettingsProvidersPage() {
 							onSaveBeforeRefresh={confirmSaveBeforeRefresh}
 							onSaveBeforeNugAction={saveBeforeNugAction}
 							onNugLoginSuccess={saveNugLoginResult}
-							onRefreshCommandCodeModels={refreshCommandCodeModels}
 						/>
 					)}
 				</ProviderConfigView>
@@ -1354,14 +1380,7 @@ function SettingsProvidersPage() {
 					hiddenModels={state.hiddenModels}
 					onAddPlatform={() => setAddPlatformOpen(true)}
 					onToggleProviderDisabled={(prefix) => {
-						// 平台集成（codex / Command Code / TokenDance）的开关一律写成草稿，
-						// 由底部保存条统一提交 —— 见 PLATFORM_PROVIDER_PREFIXES 的约定。
-						if (isPlatformProviderPrefix(prefix)) {
-							const group = providerGroups.find((item) => item.prefix === prefix);
-							if (!group) return;
-							dispatchers.setPlatformDisabled(prefix, !group.disabled);
-							return;
-						}
+						// 平台实例的开关与插件、自定义供应商一样只写草稿，由底部保存条统一提交。
 						dispatchers.toggleProviderDisabled(prefix);
 					}}
 					onOpenProviderConfig={setSelectedProvider}
@@ -1494,8 +1513,6 @@ interface ProviderSectionContentProps {
 	state: ProvidersState;
 	dispatchers: ReturnType<typeof useProvidersDispatch>;
 	providerModelsMap: Record<string, ModelOption[]>;
-	/** Command Code 的模型（已带 `CommandCode:` 前缀），由后端从 Provider API 拉取并缓存。 */
-	commandcodeModels: ModelOption[];
 	/** Plugin provider models keyed by prefix (the detail area's source for plugin providers). */
 	pluginModelsByPrefix: Record<string, ModelOption[]>;
 	anthropicModelsMap: Record<string, ModelOption[]>;
@@ -1509,8 +1526,6 @@ interface ProviderSectionContentProps {
 	onSaveBeforeRefresh: () => Promise<boolean>;
 	onSaveBeforeNugAction: () => Promise<boolean>;
 	onNugLoginSuccess: (providerId: string, apiKey: string, username: string) => Promise<boolean>;
-	/** 刷新 Command Code 的模型列表（草稿未保存时由页面负责先落盘）。 */
-	onRefreshCommandCodeModels: () => Promise<void>;
 }
 
 function ProviderSectionContent({
@@ -1519,7 +1534,6 @@ function ProviderSectionContent({
 	state,
 	dispatchers,
 	providerModelsMap,
-	commandcodeModels,
 	pluginModelsByPrefix,
 	anthropicModelsMap,
 	nugModelsMap,
@@ -1532,45 +1546,7 @@ function ProviderSectionContent({
 	onSaveBeforeRefresh,
 	onSaveBeforeNugAction,
 	onNugLoginSuccess,
-	onRefreshCommandCodeModels,
 }: ProviderSectionContentProps) {
-	// Platform providers: matched by prefix
-	if (providerKey === "CommandCode") {
-		return (
-			<CommandCodeSection
-				value={state.commandCode}
-				onChange={dispatchers.setCommandCode}
-				onToggleDisabled={() =>
-					dispatchers.setPlatformDisabled("CommandCode", !state.commandCode.disabled)
-				}
-				models={commandcodeModels}
-				hiddenModels={state.hiddenModels}
-				onToggleHidden={dispatchers.toggleHidden}
-				onBatchToggleHidden={dispatchers.batchToggleHidden}
-				customModels={state.customModels}
-				onCustomModelsChange={dispatchers.setCustomModels}
-				modelProtocols={state.modelProtocols}
-				onModelProtocolChange={dispatchers.setModelProtocol}
-				onTestModel={onTestModel}
-				onRefreshModels={onRefreshCommandCodeModels}
-			/>
-		);
-	}
-
-	if (providerKey === "codex") {
-		return (
-			<CodexSection
-				hiddenModels={state.hiddenModels}
-				onToggleHidden={dispatchers.toggleHidden}
-				customModels={state.customModels}
-				onCustomModelsChange={dispatchers.setCustomModels}
-				modelProtocols={state.modelProtocols}
-				onModelProtocolChange={dispatchers.setModelProtocol}
-				onTestModel={onTestModel}
-			/>
-		);
-	}
-
 	// Plugin providers: the plugin either ships its own `provider-settings` view or falls
 	// back to the host's schema-driven form. Checked before the multi-instance lookups
 	// because a plugin prefix can never be a custom-API or NUG provider id.
