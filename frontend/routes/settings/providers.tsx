@@ -451,69 +451,69 @@ function SettingsProvidersPage() {
 		dispatch({ type: "RESTORE_FROM_SNAPSHOT", snapshot: savedSnapshot.current });
 	}, []);
 
-// 卡片上的删除与详情页里的删除按钮是同一条路径：只从草稿移除，保存条统一提交。
-const deleteDraftProvider = useCallback(
-	(id: string) => {
-		dispatchers.setCustomApiProviders((prev) => prev.filter((provider) => provider.id !== id));
-		dispatchers.setNugProviders((prev) => prev.filter((provider) => provider.id !== id));
-	},
-	[dispatchers.setCustomApiProviders, dispatchers.setNugProviders],
-);
-// ── 平台实例（添加 / 改配置 / 启停 / 删除）──
-// 全部走页面草稿：改完点右下角「保存更改」才落库，「放弃更改」整体回滚。
-const setPlatformInstances = useCallback(
-	(updater: PlatformInstanceRow[] | ((prev: PlatformInstanceRow[]) => PlatformInstanceRow[])) => {
-		dispatch({ type: "SET_PLATFORM_INSTANCES", instances: updater });
-	},
-	[],
-);
-const addPlatformInstance = useCallback(
-	(instance: NewPlatformInstance) => {
-		setPlatformInstances((current) => [
-			...current,
-			{
-				id: `platform-${instance.platform}-${Date.now().toString(36)}`,
-				platform: instance.platform,
-				suffix: instance.suffix,
-				prefix: instance.prefix,
-				disabled: false,
-				config: instance.config,
-			},
-		]);
-	},
-	[setPlatformInstances],
-);
-const savePlatformInstanceConfig = useCallback(
-	(id: string, config: Record<string, unknown>) => {
-		setPlatformInstances((current) =>
-			current.map((instance) => (instance.id === id ? { ...instance, config } : instance)),
-		);
-	},
-	[setPlatformInstances],
-);
-const renamePlatformInstance = useCallback(
-	(id: string, next: { suffix: string; prefix: string }) => {
-		setPlatformInstances((current) =>
-			current.map((instance) => (instance.id === id ? { ...instance, ...next } : instance)),
-		);
-	},
-	[setPlatformInstances],
-);
-const togglePlatformInstance = useCallback(
-	(id: string) => {
-		setPlatformInstances((current) =>
-			current.map((instance) =>
-				instance.id === id ? { ...instance, disabled: !instance.disabled } : instance,
-			),
-		);
-	},
-	[setPlatformInstances],
-);
-const deletePlatformInstance = useCallback(
-	(id: string) => {
-		setPlatformInstances((current) => current.filter((instance) => instance.id !== id));
-	},
-	[setPlatformInstances],
+	// 卡片上的删除与详情页里的删除按钮是同一条路径：只从草稿移除，保存条统一提交。
+	const deleteDraftProvider = useCallback(
+		(id: string) => {
+			dispatchers.setCustomApiProviders((prev) => prev.filter((provider) => provider.id !== id));
+			dispatchers.setNugProviders((prev) => prev.filter((provider) => provider.id !== id));
+		},
+		[dispatchers.setCustomApiProviders, dispatchers.setNugProviders],
+	);
+	// ── 平台实例（添加 / 改配置 / 启停 / 删除）──
+	// 全部走页面草稿：改完点右下角「保存更改」才落库，「放弃更改」整体回滚。
+	const setPlatformInstances = useCallback(
+		(updater: PlatformInstanceRow[] | ((prev: PlatformInstanceRow[]) => PlatformInstanceRow[])) => {
+			dispatch({ type: "SET_PLATFORM_INSTANCES", instances: updater });
+		},
+		[],
+	);
+	const addPlatformInstance = useCallback(
+		(instance: NewPlatformInstance) => {
+			setPlatformInstances((current) => [
+				...current,
+				{
+					id: `platform-${instance.platform}-${Date.now().toString(36)}`,
+					platform: instance.platform,
+					suffix: instance.suffix,
+					prefix: instance.prefix,
+					disabled: false,
+					config: instance.config,
+				},
+			]);
+		},
+		[setPlatformInstances],
+	);
+	const savePlatformInstanceConfig = useCallback(
+		(id: string, config: Record<string, unknown>) => {
+			setPlatformInstances((current) =>
+				current.map((instance) => (instance.id === id ? { ...instance, config } : instance)),
+			);
+		},
+		[setPlatformInstances],
+	);
+	const renamePlatformInstance = useCallback(
+		(id: string, next: { suffix: string; prefix: string }) => {
+			setPlatformInstances((current) =>
+				current.map((instance) => (instance.id === id ? { ...instance, ...next } : instance)),
+			);
+		},
+		[setPlatformInstances],
+	);
+	const togglePlatformInstance = useCallback(
+		(id: string) => {
+			setPlatformInstances((current) =>
+				current.map((instance) =>
+					instance.id === id ? { ...instance, disabled: !instance.disabled } : instance,
+				),
+			);
+		},
+		[setPlatformInstances],
+	);
+	const deletePlatformInstance = useCallback(
+		(id: string) => {
+			setPlatformInstances((current) => current.filter((instance) => instance.id !== id));
+		},
+		[setPlatformInstances],
 	);
 
 	const saveProvidersState = useCallback(
@@ -1435,50 +1435,50 @@ const deletePlatformInstance = useCallback(
 		}
 
 		return (
-<>
-	<ProviderOverviewView
-		groups={providerGroups}
-		hiddenModels={state.hiddenModels}
-		onToggleProviderDisabled={(prefix) => {
-			// 平台实例的开关改实例自己的 disabled 草稿；其它供应商沿用前缀集合。
-			const instance = platformInstances.find((entry) => entry.prefix === prefix);
-			if (instance) {
-				togglePlatformInstance(instance.id);
-				return;
-			}
-			// 不属于实例的平台集成（内置 codex 等）仍写成草稿，
-			// 由底部保存条统一提交 —— 见 PLATFORM_PROVIDER_PREFIXES 的约定。
-			if (isPlatformProviderPrefix(prefix)) {
-				const group = providerGroups.find((item) => item.prefix === prefix);
-				if (!group) return;
-				dispatchers.setPlatformDisabled(prefix, !group.disabled);
-				return;
-			}
-			dispatchers.toggleProviderDisabled(prefix);
-		}}
-		onDeleteProvider={deleteDraftProvider}
-		onDeletePlatformInstance={(prefix) => {
-			const instance = platformInstances.find((entry) => entry.prefix === prefix);
-			if (!instance) return;
-			deletePlatformInstance(instance.id);
-			if (selectedProvider === instance.id) setSelectedProvider(null);
-		}}
-		onOpenProviderConfig={setSelectedProvider}
-		selectedProvider={selectedProvider}
-	/>
-	<PlatformInstancesModal
-		opened={addPlatformOpen}
-		onClose={() => setAddPlatformOpen(false)}
-		instances={platformInstances}
-		takenPrefixes={[
-			...state.customApiProviders.map((provider) => provider.prefix),
-			...state.nugProviders.map((provider) => provider.prefix),
-			...(pluginProviderGroups ?? []).map((group) => group.prefix),
-		].filter(Boolean)}
-		onAdd={addPlatformInstance}
-		onDelete={deletePlatformInstance}
-	/>
-</>
+			<>
+				<ProviderOverviewView
+					groups={providerGroups}
+					hiddenModels={state.hiddenModels}
+					onToggleProviderDisabled={(prefix) => {
+						// 平台实例的开关改实例自己的 disabled 草稿；其它供应商沿用前缀集合。
+						const instance = platformInstances.find((entry) => entry.prefix === prefix);
+						if (instance) {
+							togglePlatformInstance(instance.id);
+							return;
+						}
+						// 不属于实例的平台集成（内置 codex 等）仍写成草稿，
+						// 由底部保存条统一提交 —— 见 PLATFORM_PROVIDER_PREFIXES 的约定。
+						if (isPlatformProviderPrefix(prefix)) {
+							const group = providerGroups.find((item) => item.prefix === prefix);
+							if (!group) return;
+							dispatchers.setPlatformDisabled(prefix, !group.disabled);
+							return;
+						}
+						dispatchers.toggleProviderDisabled(prefix);
+					}}
+					onDeleteProvider={deleteDraftProvider}
+					onDeletePlatformInstance={(prefix) => {
+						const instance = platformInstances.find((entry) => entry.prefix === prefix);
+						if (!instance) return;
+						deletePlatformInstance(instance.id);
+						if (selectedProvider === instance.id) setSelectedProvider(null);
+					}}
+					onOpenProviderConfig={setSelectedProvider}
+					selectedProvider={selectedProvider}
+				/>
+				<PlatformInstancesModal
+					opened={addPlatformOpen}
+					onClose={() => setAddPlatformOpen(false)}
+					instances={platformInstances}
+					takenPrefixes={[
+						...state.customApiProviders.map((provider) => provider.prefix),
+						...state.nugProviders.map((provider) => provider.prefix),
+						...(pluginProviderGroups ?? []).map((group) => group.prefix),
+					].filter(Boolean)}
+					onAdd={addPlatformInstance}
+					onDelete={deletePlatformInstance}
+				/>
+			</>
 		);
 	};
 
