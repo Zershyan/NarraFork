@@ -119,6 +119,11 @@ export interface OpenAIProviderConfig {
 	prefix: string;
 	apiKey: string;
 	/**
+	 * Internal: resolve the key per request instead of using `apiKey` verbatim.
+	 * Set by platforms backed by a key pool; never persisted in settings.
+	 */
+	apiKeyResolver?: () => string | Promise<string>;
+	/**
 	 * Internal: full Authorization header value that overrides the default
 	 * `Bearer ${apiKey}` (e.g. Codex Agent Identity's `AgentAssertion ...`).
 	 * Set dynamically by the Codex provider; not persisted in settings.

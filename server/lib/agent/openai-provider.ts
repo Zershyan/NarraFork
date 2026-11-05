@@ -1887,7 +1887,7 @@ export class OpenAIProvider implements ProviderAdapter {
 	 * For standard API key auth, returns the configured API key.
 	 */
 	private async getEffectiveApiKey(): Promise<string> {
-		return this.config.apiKey;
+		return this.config.apiKeyResolver ? await this.config.apiKeyResolver() : this.config.apiKey;
 	}
 }
 

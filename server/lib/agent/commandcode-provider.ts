@@ -15,9 +15,16 @@ import {
 	commandCodeProviderBase,
 	selectCommandCodeEndpoint,
 } from "../commandcode-protocol";
+import { hotSafe } from "../hot-safe";
 import { resolveModelProtocol } from "../settings";
 import type { ProxyOverride } from "../settings/types";
 import type { UserAgentMode } from "../user-agent";
+import {
+	type CommandCodeAccount,
+	type CommandCodeLoadBalancing,
+	commandCodeAccountsOf,
+	selectCommandCodeAccount,
+} from "./commandcode-accounts";
 import { AnthropicProvider } from "./anthropic-provider";
 import { OpenAIProvider } from "./openai-provider";
 import type { ProviderAdapter } from "./provider";
@@ -28,6 +35,9 @@ export interface CommandCodeProviderSettings {
 	disabled?: boolean;
 	/** 从 Studio 生成的 API key；填了就完全不需要安装 CLI。 */
 	apiKey?: string;
+	/** 一个实例多把 key：按 loadBalancing 挑选，失效的自动避开。 */
+	accounts?: CommandCodeAccount[];
+	loadBalancing?: CommandCodeLoadBalancing;
 	/** 自定义 base，便于上游改址或走代理；默认是 Provider API 根。 */
 	baseUrl?: string;
 	/** 逐模型的端点覆盖，优先于按模型名的默认规则。 */
@@ -40,20 +50,47 @@ export interface CommandCodeProviderSettings {
 	extraHeaders?: Record<string, string>;
 }
 
+/** 轮流指针：按实例前缀推进，进程内即可，重启从池首开始。 */
+const poolCursors = hotSafe("narrafork:commandCodePoolCursors", () => new Map<string, number>());
+
+/** 请求级换 key；全部都在停用窗口里时仍给出第一把，让上游报出真实错误。 */
+function nextCommandCodeKey(
+	prefix: string,
+	config: CommandCodeProviderSettings | undefined,
+	accounts: readonly CommandCodeAccount[],
+): string {
+	const selected = selectCommandCodeAccount(
+		accounts,
+		config?.loadBalancing,
+		poolCursors.get(prefix) ?? 0,
+	);
+	if (!selected) return accounts[0]?.apiKey ?? "";
+	poolCursors.set(prefix, selected.nextCursor);
+	return selected.account.apiKey;
+}
+
 /** 未登录或已停用时返回 undefined，由上层给出可读提示。 */
 export function buildCommandCodeProvider(
 	model: string,
 	config?: CommandCodeProviderSettings,
+	/** 实例自己的前缀；省略时是内置的那一条。 */
+	prefix: string = COMMAND_CODE_PREFIX,
 ): ProviderAdapter | undefined {
 	if (config?.disabled) return undefined;
+	const accounts = commandCodeAccountsOf(config);
 	const auth = resolveCommandCodeToken(config?.apiKey);
-	if (!auth.credential) return undefined;
+	// 池里有 key 就用池；池为空才回落到 CLI 登录态，旧行为不变。
+	if (!accounts.length && !auth.credential) return undefined;
 	const bare = bareCommandCodeModelId(model);
 	const shared = {
 		id: "CommandCode",
 		name: "Command Code",
-		prefix: COMMAND_CODE_PREFIX,
-		apiKey: auth.credential.token,
+		prefix,
+		apiKey: accounts[0]?.apiKey ?? auth.credential?.token ?? "",
+		// 每次请求重新挑一把：同一 loop 内的多轮工具调用会逐轮轮换，不必重建 adapter。
+		...(accounts.length
+			? { apiKeyResolver: () => nextCommandCodeKey(prefix, config, accounts) }
+			: {}),
 		defaultModel: bare || model,
 		baseUrl: commandCodeProviderBase(config?.baseUrl),
 		proxy: config?.proxy,
