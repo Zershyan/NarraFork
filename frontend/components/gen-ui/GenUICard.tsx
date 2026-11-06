@@ -83,6 +83,7 @@ export function GenUICard(props: GenUICardProps) {
 				kit={props.kit}
 				height={props.height}
 				formToolUseId={props.inline?.formToolUseId}
+				stateKey={props.inline?.stateKey}
 			/>
 		) : (
 			<PrivateCard
@@ -92,6 +93,7 @@ export function GenUICard(props: GenUICardProps) {
 				historyUnavailable={props.historyUnavailable}
 				kit={props.kit}
 				height={props.height}
+				stateKey={props.inline?.stateKey}
 			/>
 		);
 	}
@@ -253,12 +255,15 @@ function PrivateCard({
 	height,
 	historyUnavailable,
 	kit,
+	stateKey,
 }: {
 	narratorId: string;
 	file: GenUiFileReference;
 	height: number;
 	historyUnavailable?: boolean;
 	kit?: GenUiKitNotice;
+	/** Keys the draft the app persists across frame rebuilds. */
+	stateKey?: string;
 }) {
 	const { t } = useTranslation("narrator");
 	const mobile = useMobileViewport();
@@ -279,7 +284,7 @@ function PrivateCard({
 	const path = `${file.directory.replace(/[\\/]$/, "")}/${file.entry}`;
 	const preview = opened ? (
 		<Suspense fallback={<Loader size="sm" />}>
-			<FilePreview narratorId={narratorId} file={file} />
+			<FilePreview narratorId={narratorId} file={file} stateKey={stateKey} />
 		</Suspense>
 	) : null;
 	return (
@@ -362,6 +367,7 @@ function AppCard({
 	historyUnavailable,
 	kit,
 	formToolUseId,
+	stateKey,
 }: {
 	narratorId: string;
 	file: GenUiFileReference;
@@ -371,6 +377,8 @@ function AppCard({
 	kit?: GenUiKitNotice;
 	/** Set while a render({path}) call waits for this app's submit. */
 	formToolUseId?: string;
+	/** Keys the draft the app persists across frame rebuilds. */
+	stateKey?: string;
 }) {
 	const { t } = useTranslation("narrator");
 	const mobile = useMobileViewport();
@@ -416,6 +424,7 @@ function AppCard({
 				file={file}
 				formToolUseId={formToolUseId}
 				onSubmitted={collapseAfterSubmit}
+				stateKey={stateKey}
 			/>
 		</Suspense>
 	) : null;
@@ -458,6 +467,7 @@ function AppCard({
 						height={bodyHeight}
 						formToolUseId={formToolUseId}
 						onSubmitted={collapseAfterSubmit}
+						stateKey={stateKey}
 					/>
 				</Suspense>
 			) : (
