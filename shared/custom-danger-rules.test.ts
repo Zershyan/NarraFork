@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
-	type CustomDangerRule,
 	compileCustomDangerPattern,
+	type CustomDangerRule,
 	matchCustomDangerRule,
+	MAX_CUSTOM_DANGER_PATTERN_CHARS,
 	sanitizeCustomDangerRules,
 } from "./custom-danger-rules";
 
@@ -38,7 +39,8 @@ describe("自定义危险反思规则", () => {
 	});
 
 	test("超长正则被拒绝", () => {
-		expect(compileCustomDangerPattern("a".repeat(301))).toBeNull();
+		expect(compileCustomDangerPattern("a".repeat(MAX_CUSTOM_DANGER_PATTERN_CHARS + 1))).toBeNull();
+		expect(compileCustomDangerPattern("a".repeat(MAX_CUSTOM_DANGER_PATTERN_CHARS))).not.toBeNull();
 	});
 
 	test("非 Bash 工具用工具名匹配", () => {

@@ -19,7 +19,11 @@ export const CUSTOM_DANGER_RULE_SEVERITIES: readonly CustomDangerRuleSeverity[] 
 ];
 
 export const MAX_CUSTOM_DANGER_RULES = 50;
-export const MAX_CUSTOM_DANGER_PATTERN_CHARS = 300;
+/**
+ * 正则长度上限。给到 2 KiB：像「命令行里任意位置、任意引号/转义/前缀写法下的 git」这种
+ * 精确识别用的正则本身就有上千字符，300 这类小上限会把它们挡在门外。
+ */
+export const MAX_CUSTOM_DANGER_PATTERN_CHARS = 2048;
 export const MAX_CUSTOM_DANGER_PROMPT_CHARS = 500;
 
 export interface CustomDangerRule {
