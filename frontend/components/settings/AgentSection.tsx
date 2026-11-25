@@ -14,7 +14,9 @@ import {
 	TextInput,
 	Title,
 } from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
 import { DEFAULT_CONTEXT_THRESHOLDS } from "@shared/context-thresholds";
+import type { CustomDangerRule } from "@shared/custom-danger-rules";
 import {
 	REQUEST_EVIDENCE_AUTO_PIN_VALUES,
 	type RequestEvidenceAutoPin,
@@ -24,6 +26,7 @@ import {
 	IconAlertTriangle,
 	IconEye,
 	IconHandStop,
+	IconListDetails,
 	IconPencilCheck,
 	IconPlus,
 	IconShield,
@@ -49,6 +52,7 @@ import type {
 	PathFlavor,
 } from "../../lib/api/types";
 import { PermissionRuleEditor } from "../permissions/PermissionRuleEditor";
+import { CustomDangerRulesModal } from "./CustomDangerRulesModal";
 
 // biome-ignore lint/suspicious/noExplicitAny: dynamic prefs type
 type AnyPrefs = any;
@@ -97,6 +101,9 @@ export interface AgentSectionProps {
 	setQuestionReflectionTimeoutMs: (v: number) => void;
 	dangerReflectionLevel: DangerReflectionLevel;
 	setDangerReflectionLevel: (v: DangerReflectionLevel) => void;
+	/** 自定义危险反思规则：命中即按规则等级与提示参与判定。 */
+	dangerReflectionRules: CustomDangerRule[];
+	setDangerReflectionRules: (v: CustomDangerRule[]) => void;
 	dangerReflectionEnabled: boolean;
 	setDangerReflectionEnabled: (v: boolean) => void;
 	dangerSkipReadOnlyConfirmations: boolean;
@@ -170,6 +177,7 @@ function isRequestEvidenceAutoPin(value: string | null): value is RequestEvidenc
 export function AgentSection(props: AgentSectionProps) {
 	const { t } = useTranslation("settings");
 	const { t: tn } = useTranslation("narrator");
+	const [dangerRulesOpened, dangerRulesHandlers] = useDisclosure(false);
 	const settingsFeatureCapability = useSettingsFeatureCapability();
 	const platform = usePlatform();
 	const serverPathFlavor: PathFlavor = platform === "windows" ? "windows" : "posix";
@@ -446,6 +454,22 @@ export function AgentSection(props: AgentSectionProps) {
 				description={t("dangerSkipReadOnlyConfirmationsDesc")}
 				checked={props.dangerSkipReadOnlyConfirmations}
 				onChange={(e) => props.setDangerSkipReadOnlyConfirmations(e.currentTarget.checked)}
+			/>
+			<Group>
+				<Button
+					variant="light"
+					size="compact-sm"
+					leftSection={<IconListDetails size={14} />}
+					onClick={dangerRulesHandlers.open}
+				>
+					{t("dangerReflectionRulesOpen", { count: props.dangerReflectionRules.length })}
+				</Button>
+			</Group>
+			<CustomDangerRulesModal
+				opened={dangerRulesOpened}
+				onClose={dangerRulesHandlers.close}
+				rules={props.dangerReflectionRules}
+				onChange={props.setDangerReflectionRules}
 			/>
 			<Select
 				label={t("autoContinuationMode")}

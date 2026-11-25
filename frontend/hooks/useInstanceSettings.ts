@@ -1,6 +1,7 @@
 import { notifications } from "@mantine/notifications";
 import { DEFAULT_BRAND_ICON_COLOR } from "@shared/branding";
 import { cloneDefaultContextThresholds } from "@shared/context-thresholds";
+import type { CustomDangerRule } from "@shared/custom-danger-rules";
 import {
 	DEFAULT_RECORDING_REQUEST_BYTES,
 	DEFAULT_RECORDING_RESPONSE_BYTES,
@@ -89,6 +90,7 @@ export interface InstanceSettingsState {
 	questionReflectionEnabled: boolean;
 	questionReflectionTimeoutMs: number;
 	dangerReflectionLevel: DangerReflectionLevel;
+	dangerReflectionRules: CustomDangerRule[];
 	dangerReflectionEnabled: boolean;
 	dangerSkipReadOnlyConfirmations: boolean;
 	autoContinuationMode: AutoContinuationMode;
@@ -271,6 +273,7 @@ function makeDefaults(): InstanceSettingsState {
 		questionReflectionEnabled: false,
 		questionReflectionTimeoutMs: 300000,
 		dangerReflectionLevel: "standard",
+		dangerReflectionRules: [],
 		dangerReflectionEnabled: true,
 		dangerSkipReadOnlyConfirmations: false,
 		autoContinuationMode: "protectedOnly",
@@ -373,6 +376,9 @@ export function useInstanceSettings(): UseInstanceSettingsReturn {
 				dangerReflectionLevel:
 					(settings.agent?.dangerReflectionLevel as DangerReflectionLevel | undefined) ??
 					(settings.agent?.dangerReflectionEnabled === false ? "off" : "standard"),
+				dangerReflectionRules: (settings.agent?.dangerReflectionRules ?? []).map(
+					(rule: CustomDangerRule) => ({ ...rule }),
+				),
 				dangerReflectionEnabled: settings.agent?.dangerReflectionEnabled ?? true,
 				dangerSkipReadOnlyConfirmations: settings.agent?.dangerSkipReadOnlyConfirmations ?? false,
 				autoContinuationMode:
@@ -495,6 +501,7 @@ export function useInstanceSettings(): UseInstanceSettingsReturn {
 					questionReflectionEnabled: state.questionReflectionEnabled,
 					questionReflectionTimeoutMs: state.questionReflectionTimeoutMs,
 					dangerReflectionLevel: state.dangerReflectionLevel,
+					dangerReflectionRules: state.dangerReflectionRules,
 					dangerReflectionEnabled: state.dangerReflectionLevel !== "off",
 					dangerSkipReadOnlyConfirmations: state.dangerSkipReadOnlyConfirmations,
 					autoContinuationMode: state.autoContinuationMode,

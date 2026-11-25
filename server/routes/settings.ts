@@ -2,6 +2,11 @@ import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { BRAND_ICON_COLOR_PATTERN, BRAND_NAME_MAX_LENGTH } from "@shared/branding";
 import {
+	MAX_CUSTOM_DANGER_PATTERN_CHARS,
+	MAX_CUSTOM_DANGER_PROMPT_CHARS,
+	MAX_CUSTOM_DANGER_RULES,
+} from "@shared/custom-danger-rules";
+import {
 	noProxyRulesSchema,
 	proxyOverrideSchema,
 	proxyUrlSchema as webFetchProxyUrlSchema,
@@ -511,6 +516,18 @@ export const updateSettingsSchema = z
 				permissionRuleAutoApprove: z.boolean(),
 				questionReflectionTimeoutMs: z.number().int().min(10000).max(3600000),
 				dangerReflectionLevel: dangerReflectionLevelSchema,
+				dangerReflectionRules: z
+					.array(
+						z.object({
+							id: z.string().min(1).max(128),
+							pattern: z.string().min(1).max(MAX_CUSTOM_DANGER_PATTERN_CHARS),
+							severity: z.enum(["low", "medium", "high", "critical"]),
+							prompt: z.string().min(1).max(MAX_CUSTOM_DANGER_PROMPT_CHARS),
+							enabled: z.boolean(),
+						}),
+					)
+					.max(MAX_CUSTOM_DANGER_RULES)
+					.optional(),
 				dangerReflectionEnabled: z.boolean(),
 				dangerSkipReadOnlyConfirmations: z.boolean(),
 				autoContinuationMode: z.enum(["always", "blockStop", "protectedOnly", "off"]),

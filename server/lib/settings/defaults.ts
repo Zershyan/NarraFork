@@ -110,6 +110,7 @@ export const DEFAULTS: NarraForkSettings = {
 		permissionRuleAutoApprove: false,
 		questionReflectionTimeoutMs: 300_000,
 		dangerReflectionLevel: "standard",
+		dangerReflectionRules: [],
 		dangerReflectionEnabled: true,
 		dangerSkipReadOnlyConfirmations: false,
 		whitelistDirs: [],
@@ -701,6 +702,10 @@ export const SETTING_DOCS: Record<string, FieldDoc> = {
 	"agent.dangerReflectionLevel": {
 		desc: "全部允许模式下危险反思的全局档位：off 关闭；light 只拦截明确危险操作，放行未知/未分类 Bash 和仅写入系统临时目录（如 /tmp）的操作；standard 拦截中高风险；strict 拦截所有已分类风险。",
 		type: "off | light | standard | strict",
+	},
+	"agent.dangerReflectionRules": {
+		desc: "自定义危险反思规则：每条含正则、触发等级与反思提示。工具调用命中正则时（Bash 匹配每条子命令，其余工具匹配工具名），按该等级与提示参与危险判定，与内置判定取更严重者；最多 50 条。",
+		type: "CustomDangerRule[]",
 	},
 	"agent.dangerReflectionEnabled": {
 		desc: "兼容旧配置的危险反思开关。新配置优先使用 dangerReflectionLevel；false 等价于 off，true 等价于 standard。",

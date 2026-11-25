@@ -3,6 +3,7 @@ import { realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { isParentSelector } from "@shared/communication-tool";
+import { matchCustomDangerRule } from "@shared/custom-danger-rules";
 import { isGenUiReadAction } from "@shared/gen-ui-tool-policy";
 import { outlinePlanSubmissionOf } from "@shared/outline-plan-submission";
 import type { ProgressSnapshot } from "@shared/progress-phase";
@@ -3304,6 +3305,37 @@ function classifyShellDanger(
 	return null;
 }
 
+/**
+ * 设置里的自定义危险反思规则命中判定。
+ *
+ * 与内置判定并列、不替代它：命中后由 `moreSevereDanger` 取更严重的一条，所以自定义规则
+ * 只能让判定更严。匹配文本对 Bash 是每条子命令，其余工具是工具名。
+ */
+function classifyCustomDanger(toolName: string, bashAnalysis?: BashAnalysis): DangerInfo | null {
+	const rules = settings.agent.dangerReflectionRules;
+	if (!rules?.length) return null;
+	const hit = matchCustomDangerRule(
+		toolName,
+		isBashToolName(toolName) ? (bashAnalysis?.commands.map((command) => command.text) ?? []) : [],
+		rules,
+	);
+	if (!hit) return null;
+	return danger(
+		hit.rule.prompt,
+		["这条判定来自设置里的自定义危险反思规则。", "是否暂停仍由整体反思级别决定。"],
+		[],
+		[`规则: ${hit.rule.pattern}`, `命中: ${hit.text}`],
+		hit.rule.severity,
+	);
+}
+
+/** 两个判定都可能是 null；取严重度更高的那个，同级保留内置判定。 */
+function moreSevereDanger(a: DangerInfo | null, b: DangerInfo | null): DangerInfo | null {
+	if (!a) return b;
+	if (!b) return a;
+	return dangerSeverityRank(b.severity) > dangerSeverityRank(a.severity) ? b : a;
+}
+
 export function classifyDanger(
 	toolName: string,
 	input: Record<string, unknown>,
@@ -3315,16 +3347,19 @@ export function classifyDanger(
 	compiledPolicy?: CompiledExecutionPolicy,
 	executionContext?: ExecutionTargetContext | null,
 ): DangerInfo | null {
-	const base = classifyToolDanger(
-		toolName,
-		input,
-		cwd,
-		bashAnalysis,
-		whitelistDirs,
-		commandWhitelist,
-		skipReadOnlyConfirmations,
-		compiledPolicy,
-		executionContext,
+	const base = moreSevereDanger(
+		classifyToolDanger(
+			toolName,
+			input,
+			cwd,
+			bashAnalysis,
+			whitelistDirs,
+			commandWhitelist,
+			skipReadOnlyConfirmations,
+			compiledPolicy,
+			executionContext,
+		),
+		classifyCustomDanger(toolName, bashAnalysis),
 	);
 	const gitReviewReason = resolveGitInternalReviewReason(
 		toolName,

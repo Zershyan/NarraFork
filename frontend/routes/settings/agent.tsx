@@ -75,6 +75,8 @@ function SettingsAgentPage() {
 				setQuestionReflectionTimeoutMs={is.setQuestionReflectionTimeoutMs}
 				dangerReflectionLevel={is.dangerReflectionLevel}
 				setDangerReflectionLevel={is.setDangerReflectionLevel}
+				dangerReflectionRules={is.dangerReflectionRules}
+				setDangerReflectionRules={is.setDangerReflectionRules}
 				dangerReflectionEnabled={is.dangerReflectionEnabled}
 				setDangerReflectionEnabled={is.setDangerReflectionEnabled}
 				dangerSkipReadOnlyConfirmations={is.dangerSkipReadOnlyConfirmations}

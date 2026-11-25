@@ -4,6 +4,7 @@
  */
 
 import type { PathFlavor, RuleTargetSelector } from "@server/services/execution-policy/types";
+import type { CustomDangerRule } from "@shared/custom-danger-rules";
 import type { McpLoadingMode } from "@shared/mcp-loading-mode";
 import type { NoProxyRule } from "@shared/proxy-settings";
 import type { RecordingSettings } from "@shared/request-recording";
@@ -874,6 +875,8 @@ export interface NarraForkSettings {
 		dangerReflectionLevel: DangerReflectionLevel;
 		/** Enable danger reflection secondary confirmations for high-risk bypass-permissions operations. */
 		dangerReflectionEnabled: boolean;
+		/** 自定义危险反思规则：命中即按规则等级与提示参与危险判定（与内置取更严重者）。 */
+		dangerReflectionRules?: CustomDangerRule[];
 		/** Skip danger reflection secondary confirmations for operations that are classified as read-only. */
 		dangerSkipReadOnlyConfirmations: boolean;
 		/** Auto-continuation mode: controls whether/when the agent auto-continues after a turn. */
